@@ -332,10 +332,39 @@ static int qemuCreateInBridgePortWithHelper(virQEMUDriverConfigPtr cfg,
     return *tapfd < 0 ? -1 : 0;
 }
 
+/**
+ * qemuExecuteEthernetScript:
+ * @ifname: the interface name
+ * @script: the script name
+ *
+ * This function executes script for new tap device created by libvirt.
+ * Returns 0 in case of success or -1 on failure
+ */
+static int
+qemuExecuteEthernetScript(const char *ifname, const char *script)
+{
+    virCommandPtr cmd;
+    int ret;
+
+    cmd = virCommandNew(script);
+    virCommandAddArgFormat(cmd, "%s", ifname);
+    virCommandClearCaps(cmd);
+#ifdef CAP_NET_ADMIN
+    virCommandAllowCap(cmd, CAP_NET_ADMIN);
+#endif
+    virCommandAddEnvPassCommon(cmd);
+
+    ret = virCommandRun(cmd, NULL);
+
+    virCommandFree(cmd);
+    return ret;
+}
+
 /* qemuNetworkIfaceConnect - *only* called if actualType is
- * VIR_DOMAIN_NET_TYPE_NETWORK or VIR_DOMAIN_NET_TYPE_BRIDGE (i.e. if
- * the connection is made with a tap device connecting to a bridge
- * device)
+ * VIR_DOMAIN_NET_TYPE_NETWORK, VIR_DOMAIN_NET_TYPE_BRIDGE
+ * VIR_DOMAIN_NET_TYPE_ETHERNET (i.e. if the connection is
+ * made with a tap device connecting to a bridge device or
+ * use plain tap device)
  */
 int
 qemuNetworkIfaceConnect(virDomainDefPtr def,
@@ -351,6 +380,7 @@ qemuNetworkIfaceConnect(virDomainDefPtr def,
     bool template_ifname = false;
     virQEMUDriverConfigPtr cfg = virQEMUDriverGetConfig(driver);
     const char *tunpath = "/dev/net/tun";
+    virMacAddr tapmac;
 
     if (net->backend.tap) {
         tunpath = net->backend.tap;
@@ -359,11 +389,6 @@ qemuNetworkIfaceConnect(virDomainDefPtr def,
                            _("cannot use custom tap device in session mode"));
             goto cleanup;
         }
-    }
-
-    if (!(brname = virDomainNetGetActualBridgeName(net))) {
-        virReportError(VIR_ERR_INTERNAL_ERROR, "%s", _("Missing bridge name"));
-        goto cleanup;
     }
 
     if (!net->ifname ||
@@ -381,40 +406,65 @@ qemuNetworkIfaceConnect(virDomainDefPtr def,
         tap_create_flags |= VIR_NETDEV_TAP_CREATE_VNET_HDR;
     }
 
-    if (cfg->privileged) {
-        if (virNetDevTapCreateInBridgePort(brname, &net->ifname, &net->mac,
-                                           def->uuid, tunpath, tapfd, *tapfdSize,
-                                           virDomainNetGetActualVirtPortProfile(net),
-                                           virDomainNetGetActualVlan(net),
-                                           tap_create_flags) < 0) {
+    if (virDomainNetGetActualType(net) == VIR_DOMAIN_NET_TYPE_ETHERNET) {
+        if (virNetDevTapCreate(&net->ifname, tunpath, tapfd, *tapfdSize,
+                               tap_create_flags) < 0) {
             virDomainAuditNetDevice(def, net, tunpath, false);
             goto cleanup;
         }
-        if (virDomainNetGetActualBridgeMACTableManager(net)
-            == VIR_NETWORK_BRIDGE_MAC_TABLE_MANAGER_LIBVIRT) {
-            /* libvirt is managing the FDB of the bridge this device
-             * is attaching to, so we need to turn off learning and
-             * unicast_flood on the device to prevent the kernel from
-             * adding any FDB entries for it. We will add add an fdb
-             * entry ourselves (during qemuInterfaceStartDevices(),
-             * using the MAC address from the interface config.
-             */
-            if (virNetDevBridgePortSetLearning(brname, net->ifname, false) < 0)
-                goto cleanup;
-            if (virNetDevBridgePortSetUnicastFlood(brname, net->ifname, false) < 0)
+        virMacAddrSet(&tapmac, &net->mac);
+
+        if (virNetDevSetMAC(net->ifname, &tapmac) < 0)
+            goto cleanup;
+
+        if (virNetDevSetOnline(net->ifname, true) < 0)
+            goto cleanup;
+
+        if (net->script) {
+            if (qemuExecuteEthernetScript(net->ifname, net->script) < 0)
                 goto cleanup;
         }
     } else {
-        if (qemuCreateInBridgePortWithHelper(cfg, brname,
-                                             &net->ifname,
-                                             tapfd, tap_create_flags) < 0) {
-            virDomainAuditNetDevice(def, net, tunpath, false);
+        if (!(brname = virDomainNetGetActualBridgeName(net))) {
+            virReportError(VIR_ERR_INTERNAL_ERROR, "%s", _("Missing bridge name"));
             goto cleanup;
         }
-        /* qemuCreateInBridgePortWithHelper can only create a single FD */
-        if (*tapfdSize > 1) {
-            VIR_WARN("Ignoring multiqueue network request");
-            *tapfdSize = 1;
+
+        if (cfg->privileged) {
+            if (virNetDevTapCreateInBridgePort(brname, &net->ifname, &net->mac,
+                                               def->uuid, tunpath, tapfd, *tapfdSize,
+                                               virDomainNetGetActualVirtPortProfile(net),
+                                               virDomainNetGetActualVlan(net),
+                                               tap_create_flags) < 0) {
+                virDomainAuditNetDevice(def, net, tunpath, false);
+                goto cleanup;
+            }
+            if (virDomainNetGetActualBridgeMACTableManager(net)
+                == VIR_NETWORK_BRIDGE_MAC_TABLE_MANAGER_LIBVIRT) {
+                /* libvirt is managing the FDB of the bridge this device
+                 * is attaching to, so we need to turn off learning and
+                 * unicast_flood on the device to prevent the kernel from
+                 * adding any FDB entries for it. We will add add an fdb
+                 * entry ourselves (during qemuInterfaceStartDevices(),
+                 * using the MAC address from the interface config.
+                 */
+                if (virNetDevBridgePortSetLearning(brname, net->ifname, false) < 0)
+                    goto cleanup;
+                if (virNetDevBridgePortSetUnicastFlood(brname, net->ifname, false) < 0)
+                    goto cleanup;
+            }
+        } else {
+            if (qemuCreateInBridgePortWithHelper(cfg, brname,
+                                                 &net->ifname,
+                                                 tapfd, tap_create_flags) < 0) {
+                virDomainAuditNetDevice(def, net, tunpath, false);
+                goto cleanup;
+            }
+            /* qemuCreateInBridgePortWithHelper can only create a single FD */
+            if (*tapfdSize > 1) {
+                VIR_WARN("Ignoring multiqueue network request");
+                *tapfdSize = 1;
+            }
         }
     }
 
@@ -5221,6 +5271,7 @@ qemuBuildHostNetStr(virDomainNetDefPtr net,
     case VIR_DOMAIN_NET_TYPE_BRIDGE:
     case VIR_DOMAIN_NET_TYPE_NETWORK:
     case VIR_DOMAIN_NET_TYPE_DIRECT:
+    case VIR_DOMAIN_NET_TYPE_ETHERNET:
         virBufferAsprintf(&buf, "tap%c", type_sep);
         /* for one tapfd 'fd=' shall be used,
          * for more than one 'fds=' is the right choice */
@@ -5235,20 +5286,6 @@ qemuBuildHostNetStr(virDomainNetDefPtr net,
             }
         }
         type_sep = ',';
-        is_tap = true;
-        break;
-
-    case VIR_DOMAIN_NET_TYPE_ETHERNET:
-        virBufferAddLit(&buf, "tap");
-        if (net->ifname) {
-            virBufferAsprintf(&buf, "%cifname=%s", type_sep, net->ifname);
-            type_sep = ',';
-        }
-        if (net->script) {
-            virBufferAsprintf(&buf, "%cscript=%s", type_sep,
-                              net->script);
-            type_sep = ',';
-        }
         is_tap = true;
         break;
 
@@ -8226,7 +8263,8 @@ qemuBuildInterfaceCommandLine(virCommandPtr cmd,
     /* Currently nothing besides TAP devices supports multiqueue. */
     if (net->driver.virtio.queues > 0 &&
         !(actualType == VIR_DOMAIN_NET_TYPE_NETWORK ||
-          actualType == VIR_DOMAIN_NET_TYPE_BRIDGE)) {
+          actualType == VIR_DOMAIN_NET_TYPE_BRIDGE ||
+          actualType == VIR_DOMAIN_NET_TYPE_ETHERNET)) {
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
                        _("Multiqueue network is not supported for: %s"),
                        virDomainNetTypeToString(actualType));
@@ -8235,7 +8273,8 @@ qemuBuildInterfaceCommandLine(virCommandPtr cmd,
 
     if (net->backend.tap &&
         !(actualType == VIR_DOMAIN_NET_TYPE_NETWORK ||
-          actualType == VIR_DOMAIN_NET_TYPE_BRIDGE)) {
+          actualType == VIR_DOMAIN_NET_TYPE_BRIDGE ||
+          actualType == VIR_DOMAIN_NET_TYPE_ETHERNET)) {
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
                        _("Custom tap device path is not supported for: %s"),
                        virDomainNetTypeToString(actualType));
@@ -8245,7 +8284,8 @@ qemuBuildInterfaceCommandLine(virCommandPtr cmd,
     cfg = virQEMUDriverGetConfig(driver);
 
     if (actualType == VIR_DOMAIN_NET_TYPE_NETWORK ||
-        actualType == VIR_DOMAIN_NET_TYPE_BRIDGE) {
+        actualType == VIR_DOMAIN_NET_TYPE_BRIDGE ||
+        actualType == VIR_DOMAIN_NET_TYPE_ETHERNET) {
         tapfdSize = net->driver.virtio.queues;
         if (!tapfdSize)
             tapfdSize = 1;
