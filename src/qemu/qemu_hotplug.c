@@ -908,7 +908,8 @@ int qemuDomainAttachNetDevice(virConnectPtr conn,
     /* Currently nothing besides TAP devices supports multiqueue. */
     if (net->driver.virtio.queues > 0 &&
         !(actualType == VIR_DOMAIN_NET_TYPE_NETWORK ||
-          actualType == VIR_DOMAIN_NET_TYPE_BRIDGE)) {
+          actualType == VIR_DOMAIN_NET_TYPE_BRIDGE ||
+          actualType == VIR_DOMAIN_NET_TYPE_ETHERNET)) {
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
                        _("Multiqueue network is not supported for: %s"),
                        virDomainNetTypeToString(actualType));
@@ -916,7 +917,8 @@ int qemuDomainAttachNetDevice(virConnectPtr conn,
     }
 
     if (actualType == VIR_DOMAIN_NET_TYPE_BRIDGE ||
-        actualType == VIR_DOMAIN_NET_TYPE_NETWORK) {
+        actualType == VIR_DOMAIN_NET_TYPE_NETWORK ||
+        actualType == VIR_DOMAIN_NET_TYPE_ETHERNET) {
         tapfdSize = vhostfdSize = net->driver.virtio.queues;
         if (!tapfdSize)
             tapfdSize = vhostfdSize = 1;
@@ -945,13 +947,6 @@ int qemuDomainAttachNetDevice(virConnectPtr conn,
                                              VIR_NETDEV_VPORT_PROFILE_OP_CREATE)) < 0)
             goto cleanup;
         iface_connected = true;
-        if (qemuOpenVhostNet(vm->def, net, priv->qemuCaps, vhostfd, &vhostfdSize) < 0)
-            goto cleanup;
-    } else if (actualType == VIR_DOMAIN_NET_TYPE_ETHERNET) {
-        vhostfdSize = 1;
-        if (VIR_ALLOC(vhostfd) < 0)
-            goto cleanup;
-        *vhostfd = -1;
         if (qemuOpenVhostNet(vm->def, net, priv->qemuCaps, vhostfd, &vhostfdSize) < 0)
             goto cleanup;
     }
