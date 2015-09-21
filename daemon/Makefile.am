@@ -177,17 +177,20 @@ libvirtd_CFLAGS = \
 	$(XDR_CFLAGS) $(DBUS_CFLAGS) $(LIBNL_CFLAGS) \
 	$(WARN_CFLAGS) $(PIE_CFLAGS) \
 	$(COVERAGE_CFLAGS) \
+	$(LIBARCHIVE_CFLAGS) \
 	-DQEMUD_PID_FILE="\"$(QEMUD_PID_FILE)\""
 
 libvirtd_LDFLAGS =					\
 	$(RELRO_LDFLAGS)				\
 	$(PIE_LDFLAGS)					\
 	$(COVERAGE_LDFLAGS)				\
+	$(LIBARCHIVE_LDFLAGS)				\
 	$(NO_INDIRECT_LDFLAGS)				\
 	$(NULL)
 
 libvirtd_LDADD =					\
 	$(LIBXML_LIBS)					\
+	$(LIBARCHIVE_LIBS)				\
 	$(GNUTLS_LIBS)					\
 	$(SASL_LIBS)					\
 	$(DBUS_LIBS)					\

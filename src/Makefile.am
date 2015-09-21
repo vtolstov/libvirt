@@ -25,11 +25,11 @@ abs_topsrcdir = $(shell cd $(top_srcdir) && pwd)
 # No libraries with the exception of LIBXML should be listed
 # here. List them against the individual XXX_la_CFLAGS targets
 # that actually use them. Also keep GETTEXT_CPPFLAGS at the end.
-INCLUDES =	-I../gnulib/lib					\
+INCLUDES =	-I../gnulib/lib				\
 		-I$(top_srcdir)/gnulib/lib			\
-		-I$(top_srcdir)					\
+		-I$(top_srcdir)				\
 		-I../include					\
-		-I$(top_srcdir)/include				\
+		-I$(top_srcdir)/include			\
 		-I$(srcdir)/util				\
 		-DIN_LIBVIRT					\
 		-Dabs_topbuilddir="\"$(abs_topbuilddir)\""	\
@@ -37,14 +37,16 @@ INCLUDES =	-I../gnulib/lib					\
 		$(GETTEXT_CPPFLAGS)
 
 AM_CFLAGS =	$(LIBXML_CFLAGS)				\
+		$(LIBARCHIVE_CFLAGS)				\
 		$(WARN_CFLAGS)					\
-		$(LOCK_CHECKING_CFLAGS)				\
+		$(LOCK_CHECKING_CFLAGS)			\
 		$(WIN32_EXTRA_CFLAGS)				\
 		$(COVERAGE_CFLAGS)
 AM_LDFLAGS =	$(DRIVER_MODULE_LDFLAGS)			\
 		$(COVERAGE_LDFLAGS)				\
 		$(RELRO_LDFLAGS)				\
 		$(NO_INDIRECT_LDFLAGS)				\
+		$(LIBARCHIVE_LDFLAGS)				\
 		$(NULL)
 
 EXTRA_DIST = $(conf_DATA) util/keymaps.csv
@@ -1051,11 +1053,13 @@ libvirt_util_la_CFLAGS = $(CAPNG_CFLAGS) $(YAJL_CFLAGS) $(LIBNL_CFLAGS) \
 		$(AM_CFLAGS) $(AUDIT_CFLAGS) $(DEVMAPPER_CFLAGS) \
 		$(DBUS_CFLAGS) $(LDEXP_LIBM) $(NUMACTL_CFLAGS)	\
 		$(SYSTEMD_DAEMON_CFLAGS) $(POLKIT_CFLAGS) \
+		$(LIBARCHIVE_CFLAGS) \
 		-I$(srcdir)/conf
 libvirt_util_la_LIBADD = $(CAPNG_LIBS) $(YAJL_LIBS) $(LIBNL_LIBS) \
 		$(THREAD_LIBS) $(AUDIT_LIBS) $(DEVMAPPER_LIBS) \
 		$(LIB_CLOCK_GETTIME) $(DBUS_LIBS) $(MSCOM_LIBS) $(LIBXML_LIBS) \
 		$(SECDRIVER_LIBS) $(NUMACTL_LIBS) $(SYSTEMD_DAEMON_LIBS) \
+		$(LIBARCHIVE_LIBS) \
 		$(POLKIT_LIBS)
 
 
@@ -2214,6 +2218,7 @@ libvirt_lxc_la_LDFLAGS = \
 		$(AM_LDFLAGS) \
 		$(CYGWIN_EXTRA_LDFLAGS) \
 		$(MINGW_EXTRA_LDFLAGS) \
+		$(LIBARCHIVE_LDFLAGS) \
 		$(NULL)
 libvirt_lxc_la_CFLAGS = $(AM_CFLAGS)
 libvirt_lxc_la_LIBADD = libvirt.la $(CYGWIN_EXTRA_LIBADD)
@@ -2292,13 +2297,15 @@ libvirt_setuid_rpc_client_la_SOURCES = 		\
 libvirt_setuid_rpc_client_la_LDFLAGS =		\
 		$(AM_LDFLAGS)			\
 		$(LIBXML_LIBS)			\
+		$(LIBARCHIVE_LIBS)		\
 		$(SECDRIVER_LIBS)		\
 		$(NULL)
 libvirt_setuid_rpc_client_la_CFLAGS =		\
 		-DLIBVIRT_SETUID_RPC_CLIENT	\
 		-I$(srcdir)/conf		\
-		-I$(srcdir)/rpc			\
+		-I$(srcdir)/rpc		\
 		$(AM_CFLAGS)			\
+		$(LIBARCHIVE_CFLAGS)		\
 		$(SECDRIVER_CFLAGS)		\
 		$(XDR_CFLAGS)			\
 		$(NULL)

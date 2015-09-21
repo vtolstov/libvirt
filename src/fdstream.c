@@ -33,6 +33,10 @@
 #include <netinet/in.h>
 #include <termios.h>
 
+#ifdef WITH_LIBARCHIVE
+# include <archive.h>
+#endif
+
 #include "fdstream.h"
 #include "virerror.h"
 #include "datatypes.h"
@@ -319,6 +323,14 @@ virFDStreamCloseInt(virStreamPtr st, bool streamAbort)
     if (VIR_CLOSE(fdst->errfd) < 0)
         VIR_DEBUG("ignoring failed close on fd %d", fdst->errfd);
 
+#ifdef WITH_LIBARCHIVE
+    if (st->archive_r != NULL) {
+        archive_read_free(st->archive_r);
+    }
+    if (st->archive_w != NULL) {
+        archive_write_free(st->archive_w);
+    }
+#endif
     st->privateData = NULL;
 
     /* call the internal stream closing callback */
@@ -385,7 +397,20 @@ static int virFDStreamWrite(virStreamPtr st, const char *bytes, size_t nbytes)
     }
 
  retry:
+#ifdef WITH_LIBARCHIVE
+    if (st->archive_w != NULL) {
+        if (archive_write_open_fd(st->archive_w, fdst->fd) != ARCHIVE_OK) {
+            ret = -1;
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           "%s", _("stream archive is not open"));
+        }
+        ret = archive_write_data(st->archive_w, bytes, nbytes);
+    } else {
+        ret = write(fdst->fd, bytes, nbytes);
+    }
+#else
     ret = write(fdst->fd, bytes, nbytes);
+#endif
     if (ret < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             ret = -2;
@@ -397,7 +422,16 @@ static int virFDStreamWrite(virStreamPtr st, const char *bytes, size_t nbytes)
                                  _("cannot write to stream"));
         }
     } else if (fdst->length) {
+#ifdef WITH_LIBARCHIVE
+        if (st->archive_w != NULL) {
+            archive_write_close(st->archive_w);
+            fdst->offset += nbytes;
+        } else {
+            fdst->offset += ret;
+        }
+#else
         fdst->offset += ret;
+#endif
     }
 
     virMutexUnlock(&fdst->lock);
@@ -435,7 +469,20 @@ static int virFDStreamRead(virStreamPtr st, char *bytes, size_t nbytes)
     }
 
  retry:
+#ifdef WITH_LIBARCHIVE
+    if (st->archive_r != NULL) {
+        if (archive_read_open_fd(st->archive_r, fdst->fd, 4096) != ARCHIVE_OK) {
+            ret = -1;
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           "%s", _("stream archive is not open"));
+        }
+        ret = archive_read_data(st->archive_r, bytes, nbytes);
+    } else {
+        ret = read(fdst->fd, bytes, nbytes);
+    }
+#else
     ret = read(fdst->fd, bytes, nbytes);
+#endif
     if (ret < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             ret = -2;
@@ -447,7 +494,16 @@ static int virFDStreamRead(virStreamPtr st, char *bytes, size_t nbytes)
                                  _("cannot read from stream"));
         }
     } else if (fdst->length) {
+#ifdef WITH_LIBARCHIVE
+        if (st->archive_r != NULL) {
+            archive_read_close(st->archive_r);
+            fdst->offset += nbytes;
+        } else {
+            fdst->offset += ret;
+        }
+#else
         fdst->offset += ret;
+#endif
     }
 
     virMutexUnlock(&fdst->lock);

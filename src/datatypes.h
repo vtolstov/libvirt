@@ -520,6 +520,11 @@ struct _virStream {
 
     virStreamDriverPtr driver;
     void *privateData;
+
+#ifdef WITH_LIBARCHIVE
+    struct archive *archive_w;
+    struct archive *archive_r;
+#endif
 };
 
 /**

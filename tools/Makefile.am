@@ -25,7 +25,11 @@ INCLUDES = \
 AM_LDFLAGS = \
 	$(RELRO_LDFLAGS)					\
 	$(NO_INDIRECT_LDFLAGS)					\
+	$(LIBARCHIVE_LDFLAGS)					\
 	$(NULL)
+
+AM_CFLAGS = \
+	$(LIBARCHIVE_CFLAGS)
 
 POD2MAN = pod2man -c "Virtualization Support" -r "$(PACKAGE)-$(VERSION)"
 
@@ -140,15 +144,18 @@ virt_host_validate_LDFLAGS = \
 		$(AM_LDFLAGS) \
 		$(PIE_LDFLAGS) \
 		$(COVERAGE_LDFLAGS) \
+		$(LIBARCHIVE_LDFLAGS) \
 		$(NULL)
 
 virt_host_validate_LDADD = \
 		../src/libvirt.la				\
-		../gnulib/lib/libgnu.la				\
+		../gnulib/lib/libgnu.la			\
+		$(LIBARCHIVE_LDFLAGS)				\
 		$(NULL)
 
 virt_host_validate_CFLAGS = \
 		$(LIBXML_CFLAGS)				\
+		$(LIBARCHIVE_CFLAGS)				\
 		$(WARN_CFLAGS)					\
 		$(PIE_CFLAGS)					\
 		$(COVERAGE_CFLAGS)				\
@@ -165,15 +172,18 @@ virt_login_shell_SOURCES =					\
 virt_login_shell_LDFLAGS = \
 		$(AM_LDFLAGS) 					\
 		$(COVERAGE_LDFLAGS)				\
+		$(LIBARHCIVE_LDFLAGS)				\
 		$(NULL)
 virt_login_shell_LDADD =					\
 		$(STATIC_BINARIES)				\
 		$(PIE_LDFLAGS)					\
 		../src/libvirt-setuid-rpc-client.la		\
+		$(LIBARCHIVE_LDFLAGS)				\
 		../gnulib/lib/libgnu.la
 
 virt_login_shell_CFLAGS =					\
 		-DLIBVIRT_SETUID_RPC_CLIENT			\
+		$(LIBARCHIVE_CFLAGS)				\
 		$(LIBXML_CFLAGS)				\
 		$(WARN_CFLAGS)					\
 		$(PIE_CFLAGS)					\
@@ -202,6 +212,7 @@ virsh_SOURCES =							\
 virsh_LDFLAGS = \
 		$(AM_LDFLAGS) 					\
 		$(COVERAGE_LDFLAGS)				\
+		$(LIBARCHIVE_LDFLAGS)				\
 		$(NULL)
 virsh_LDADD =							\
 		$(STATIC_BINARIES)				\
@@ -209,14 +220,16 @@ virsh_LDADD =							\
 		../src/libvirt.la				\
 		../src/libvirt-lxc.la				\
 		../src/libvirt-qemu.la				\
-		../gnulib/lib/libgnu.la				\
+		../gnulib/lib/libgnu.la			\
 		$(LIBXML_LIBS)					\
+		$(LIBARCHIVE_LIBS)				\
 		$(VIRSH_LIBS)
 virsh_CFLAGS =							\
 		$(WARN_CFLAGS)					\
 		$(PIE_CFLAGS)					\
 		$(COVERAGE_CFLAGS)				\
 		$(LIBXML_CFLAGS)				\
+		$(LIBARCHIVE_CFLAGS)				\
 		$(READLINE_CFLAGS)
 BUILT_SOURCES =
 

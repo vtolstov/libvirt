@@ -309,6 +309,12 @@ typedef enum {
     VIR_STORAGE_VOL_CREATE_REFLINK = 1 << 1, /* perform a btrfs lightweight copy */
 } virStorageVolCreateFlags;
 
+typedef enum {
+    VIR_STORAGE_VOL_STREAM_COMPRESS_NONE = 1 << 0,
+    VIR_STORAGE_VOL_STREAM_COMPRESS_GZIP = 1 << 1, /* compress stream with gzip */
+    VIR_STORAGE_VOL_STREAM_COMPRESS_XZ = 1 << 2,   /* compress stream with xz */
+} virStorageStreamFlags;
+
 virStorageVolPtr        virStorageVolCreateXML          (virStoragePoolPtr pool,
                                                          const char *xmldesc,
                                                          unsigned int flags);
