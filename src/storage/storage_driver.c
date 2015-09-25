@@ -36,6 +36,10 @@
 #include <errno.h>
 #include <string.h>
 
+#ifdef WITH_LIBARCHIVE
+# include <archive.h>
+#endif
+
 #include "virerror.h"
 #include "datatypes.h"
 #include "driver.h"
@@ -2100,9 +2104,11 @@ storageVolDownload(virStorageVolPtr obj,
     virStoragePoolObjPtr pool = NULL;
     virStorageVolDefPtr vol = NULL;
     int ret = -1;
-
-    virCheckFlags(0, -1);
-
+/*
+    virCheckFlags(VIR_STORAGE_VOL_STREAM_COMPRESS_NONE |
+                  VIR_STORAGE_VOL_STREAM_COMPRESS_GZIP |
+                  VIR_STORAGE_VOL_STREAM_COMPRESS_XZ, -1);
+*/
     if (!(vol = virStorageVolDefFromVol(obj, &pool, &backend)))
         return -1;
 
@@ -2122,8 +2128,30 @@ storageVolDownload(virStorageVolPtr obj,
         goto cleanup;
     }
 
+    if (!(flags & VIR_STORAGE_VOL_STREAM_COMPRESS_NONE)) {
+#ifdef WITH_LIBARCHIVE
+        stream->archive_w = archive_write_new();
+        if (flags & VIR_STORAGE_VOL_STREAM_COMPRESS_GZIP)
+            if (archive_write_add_filter(stream->archive_w, ARCHIVE_FILTER_GZIP) != 0) {
+                virReportError(VIR_ERR_OPERATION_INVALID,
+                               _("libarchive error."));
+                goto cleanup;
+            }
+        if (flags & VIR_STORAGE_VOL_STREAM_COMPRESS_XZ)
+            if (archive_write_add_filter(stream->archive_w, ARCHIVE_FILTER_XZ) != 0) {
+                virReportError(VIR_ERR_OPERATION_INVALID,
+                               _("libarchive error."));
+                goto cleanup;
+            }
+#else
+    virReportError(VIR_ERR_NO_SUPPORT, "%s",
+                   _("libvirt doesn't support compression in volume download"));
+    goto cleanup;
+#endif
+    }
+
     ret = backend->downloadVol(obj->conn, pool, vol, stream,
-                               offset, length, flags);
+                               offset, length, 0);
 
  cleanup:
     virStoragePoolObjUnlock(pool);
@@ -2217,7 +2245,9 @@ storageVolUpload(virStorageVolPtr obj,
     virStorageVolStreamInfoPtr cbdata = NULL;
     int ret = -1;
 
-    virCheckFlags(0, -1);
+    virCheckFlags(VIR_STORAGE_VOL_STREAM_COMPRESS_NONE |
+                  VIR_STORAGE_VOL_STREAM_COMPRESS_GZIP |
+                  VIR_STORAGE_VOL_STREAM_COMPRESS_XZ, -1);
 
     if (!(vol = virStorageVolDefFromVol(obj, &pool, &backend)))
         return -1;
@@ -2257,8 +2287,30 @@ storageVolUpload(virStorageVolPtr obj,
             goto cleanup;
     }
 
+    if (!(flags & VIR_STORAGE_VOL_STREAM_COMPRESS_NONE)) {
+#ifdef HAVE_LIBARCHIVE
+        stream->archive_r = archive_read_new();
+        if (flags & VIR_STORAGE_VOL_STREAM_COMPRESS_GZIP)
+            if (archive_read_support_filter_gzip(stream->archive_r) != 0) {
+                virReportError(VIR_ERR_OPERATION_INVALID,
+                               _("libarchive error."));
+                goto cleanup;
+            }
+        if (flags & VIR_STORAGE_VOL_STREAM_COMPRESS_XZ)
+            if (archive_read_support_filter_xz(stream->archive_r) != 0) {
+                virReportError(VIR_ERR_OPERATION_INVALID,
+                               _("libarchive error."));
+                goto cleanup;
+            }
+#else
+    virReportError(VIR_ERR_NO_SUPPORT, "%s",
+                   _("libvirt doesn't support compression in volume upload"));
+    goto cleanup;
+#endif
+    }
+
     if ((ret = backend->uploadVol(obj->conn, pool, vol, stream,
-                                  offset, length, flags)) < 0)
+                                  offset, length, 0)) < 0)
         goto cleanup;
 
     /* Add cleanup callback - call after uploadVol since the stream
