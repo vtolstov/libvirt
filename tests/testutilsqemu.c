@@ -8,6 +8,8 @@
 # include "cpu_conf.h"
 # include "qemu/qemu_driver.h"
 # include "qemu/qemu_domain.h"
+# define __QEMU_CAPSRIV_H_ALLOW__
+# include "qemu/qemu_capspriv.h"
 # include "virstring.h"
 
 # define VIR_FROM_THIS VIR_FROM_QEMU
@@ -313,9 +315,6 @@ virCapsPtr testQemuCapsInit(void)
     virCapsGuestPtr guest;
     virCapsGuestMachinePtr *machines = NULL;
     int nmachines = 0;
-    static const char *const xen_machines[] = {
-        "xenner"
-    };
 
     if (!(caps = virCapabilitiesNew(VIR_ARCH_X86_64, false, false)))
         return NULL;
@@ -335,6 +334,8 @@ virCapsPtr testQemuCapsInit(void)
         goto cleanup;
 
     caps->host.cpu = cpuDefault;
+
+    caps->host.nnumaCell_max = 4;
 
     if ((machines = testQemuAllocMachines(&nmachines)) == NULL)
         goto cleanup;
@@ -396,16 +397,6 @@ virCapsPtr testQemuCapsInit(void)
         goto cleanup;
     machines = NULL;
 
-    nmachines = ARRAY_CARDINALITY(xen_machines);
-    if ((machines = virCapabilitiesAllocMachines(xen_machines, nmachines)) == NULL)
-        goto cleanup;
-
-    if ((guest = virCapabilitiesAddGuest(caps, VIR_DOMAIN_OSTYPE_XEN, VIR_ARCH_X86_64,
-                                         "/usr/bin/xenner", NULL,
-                                         nmachines, machines)) == NULL)
-        goto cleanup;
-    machines = NULL;
-
     if (virCapabilitiesAddGuestDomain(guest,
                                       VIR_DOMAIN_VIRT_KVM,
                                       "/usr/bin/kvm",
@@ -462,7 +453,7 @@ testSCSIDeviceGetSgName(const char *sysfs_prefix ATTRIBUTE_UNUSED,
                         const char *adapter ATTRIBUTE_UNUSED,
                         unsigned int bus ATTRIBUTE_UNUSED,
                         unsigned int target ATTRIBUTE_UNUSED,
-                        unsigned int unit ATTRIBUTE_UNUSED)
+                        unsigned long long unit ATTRIBUTE_UNUSED)
 {
     char *sg = NULL;
 
@@ -524,4 +515,75 @@ qemuTestParseCapabilities(const char *capsFile)
     xmlXPathFreeContext(ctxt);
     return NULL;
 }
+
+void qemuTestDriverFree(virQEMUDriver *driver)
+{
+    virMutexDestroy(&driver->lock);
+    virQEMUCapsCacheFree(driver->qemuCapsCache);
+    virObjectUnref(driver->xmlopt);
+    virObjectUnref(driver->caps);
+    virObjectUnref(driver->config);
+}
+
+int qemuTestCapsCacheInsert(virQEMUCapsCachePtr cache, const char *binary,
+                            virQEMUCapsPtr caps)
+{
+    int ret;
+
+    if (caps) {
+        /* Our caps were created artificially, so we don't want
+         * virQEMUCapsCacheFree() to attempt to deallocate them */
+        virObjectRef(caps);
+    } else {
+        caps = virQEMUCapsNew();
+        if (!caps)
+            return -ENOMEM;
+    }
+
+    /* We can have repeating names for our test data sets,
+     * so make sure there's no old copy */
+    virHashRemoveEntry(cache->binaries, binary);
+
+    ret = virHashAddEntry(cache->binaries, binary, caps);
+    if (ret < 0)
+        virObjectUnref(caps);
+    else
+        qemuTestCapsName = binary;
+
+    return ret;
+}
+
+int qemuTestDriverInit(virQEMUDriver *driver)
+{
+    if (virMutexInit(&driver->lock) < 0)
+        return -1;
+
+    driver->config = virQEMUDriverConfigNew(false);
+    if (!driver->config)
+        goto error;
+
+    driver->caps = testQemuCapsInit();
+    if (!driver->caps)
+        goto error;
+
+    /* Using /dev/null for libDir and cacheDir automatically produces errors
+     * upon attempt to use any of them */
+    driver->qemuCapsCache = virQEMUCapsCacheNew("/dev/null", "/dev/null", 0, 0);
+    if (!driver->qemuCapsCache)
+        goto error;
+
+    driver->xmlopt = virQEMUDriverCreateXMLConf(driver);
+    if (!driver->xmlopt)
+        goto error;
+
+    if (qemuTestCapsCacheInsert(driver->qemuCapsCache, "empty", NULL) < 0)
+        goto error;
+
+    return 0;
+
+ error:
+    qemuTestDriverFree(driver);
+    return -1;
+}
+
 #endif

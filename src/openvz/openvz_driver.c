@@ -1093,6 +1093,7 @@ openvzDomainCreateXML(virConnectPtr conn, const char *xml,
     if (!(vm = virDomainObjListAdd(driver->domains,
                                    vmdef,
                                    driver->xmlopt,
+                                   VIR_DOMAIN_OBJ_LIST_ADD_LIVE |
                                    VIR_DOMAIN_OBJ_LIST_ADD_CHECK_LIVE,
                                    NULL)))
         goto cleanup;
@@ -2047,7 +2048,7 @@ openvzUpdateDevice(virDomainDefPtr vmdef,
         cur = vmdef->fss[pos];
 
         /* We only allow updating the quota */
-        if (!STREQ(cur->src, fs->src)
+        if (STRNEQ(cur->src, fs->src)
             || cur->type != fs->type
             || cur->accessmode != fs->accessmode
             || cur->wrpolicy != fs->wrpolicy
@@ -2155,7 +2156,7 @@ static int
 openvzNodeGetInfo(virConnectPtr conn ATTRIBUTE_UNUSED,
                   virNodeInfoPtr nodeinfo)
 {
-    return nodeGetInfo(nodeinfo);
+    return nodeGetInfo(NULL, nodeinfo);
 }
 
 
@@ -2177,7 +2178,7 @@ openvzNodeGetMemoryStats(virConnectPtr conn ATTRIBUTE_UNUSED,
                          int *nparams,
                          unsigned int flags)
 {
-    return nodeGetMemoryStats(cellNum, params, nparams, flags);
+    return nodeGetMemoryStats(NULL, cellNum, params, nparams, flags);
 }
 
 
@@ -2207,7 +2208,7 @@ openvzNodeGetCPUMap(virConnectPtr conn ATTRIBUTE_UNUSED,
                     unsigned int *online,
                     unsigned int flags)
 {
-    return nodeGetCPUMap(cpumap, online, flags);
+    return nodeGetCPUMap(NULL, cpumap, online, flags);
 }
 
 

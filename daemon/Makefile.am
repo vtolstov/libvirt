@@ -101,9 +101,9 @@ qemu_dispatch.h: $(top_srcdir)/src/rpc/gendispatch.pl \
 	  --mode=server qemu QEMU $(QEMU_PROTOCOL) \
 	  > $(srcdir)/qemu_dispatch.h
 
-admin_dispatch.h: $(srcdir)/../src/rpc/gendispatch.pl \
+admin_dispatch.h: $(top_srcdir)/src/rpc/gendispatch.pl \
 		$(ADMIN_PROTOCOL)
-	$(AM_V_GEN)$(PERL) -w $(srcdir)/../src/rpc/gendispatch.pl \
+	$(AM_V_GEN)$(PERL) -w $(top_srcdir)/src/rpc/gendispatch.pl \
 	  --mode=server admin ADMIN $(ADMIN_PROTOCOL) \
 	  > $(srcdir)/admin_dispatch.h
 
@@ -128,8 +128,7 @@ libvirtd_conf_la_LIBADD = $(LIBXML_LIBS)
 
 noinst_LTLIBRARIES += libvirtd_admin.la
 libvirtd_admin_la_SOURCES = \
-		admin_server.c admin_server.h \
-		../src/admin/admin_protocol.c
+		admin_server.c admin_server.h
 
 libvirtd_admin_la_CFLAGS = \
 		$(AM_CFLAGS)		\
@@ -137,13 +136,16 @@ libvirtd_admin_la_CFLAGS = \
 		$(PIE_CFLAGS)		\
 		$(WARN_CFLAGS)		\
 		$(LIBXML_CFLAGS)	\
-		$(COVERAGE_CFLAGS)
-
+		$(COVERAGE_CFLAGS)	\
+		$(NULL)
 libvirtd_admin_la_LDFLAGS = \
 		$(PIE_LDFLAGS)		\
 		$(RELRO_LDFLAGS)	\
 		$(COVERAGE_LDFLAGS)	\
-		$(NO_INDIRECT_LDFLAGS)
+		$(NO_INDIRECT_LDFLAGS)  \
+		$(NULL)
+libvirtd_admin_la_LIBADD =	\
+		../src/libvirt-admin.la
 
 man8_MANS = libvirtd.8
 

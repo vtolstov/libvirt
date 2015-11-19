@@ -1154,7 +1154,7 @@ xenParseSxpr(const struct sexpr *root,
         }
     }
 
-    virDomainDefSetMemoryInitial(def, (sexpr_u64(root, "domain/maxmem") << 10));
+    virDomainDefSetMemoryTotal(def, (sexpr_u64(root, "domain/maxmem") << 10));
     def->mem.cur_balloon = (sexpr_u64(root, "domain/memory") << 10);
 
     if (def->mem.cur_balloon > virDomainDefGetMemoryActual(def))
@@ -1208,7 +1208,7 @@ xenParseSxpr(const struct sexpr *root,
             goto error;
         }
     } else {
-        def->onCrash = VIR_DOMAIN_LIFECYCLE_DESTROY;
+        def->onCrash = VIR_DOMAIN_LIFECYCLE_CRASH_DESTROY;
     }
 
     if (hvm) {
@@ -1962,6 +1962,7 @@ xenFormatSxprNet(virConnectPtr conn,
     case VIR_DOMAIN_NET_TYPE_SERVER:
     case VIR_DOMAIN_NET_TYPE_CLIENT:
     case VIR_DOMAIN_NET_TYPE_MCAST:
+    case VIR_DOMAIN_NET_TYPE_UDP:
     case VIR_DOMAIN_NET_TYPE_INTERNAL:
     case VIR_DOMAIN_NET_TYPE_DIRECT:
     case VIR_DOMAIN_NET_TYPE_HOSTDEV:
@@ -2344,7 +2345,7 @@ xenFormatSxpr(virConnectPtr conn,
                     /* Only xend <= 3.0.2 wants cdrom config here */
                     if (xendConfigVersion != XEND_CONFIG_VERSION_3_0_2)
                         break;
-                    if (!STREQ(def->disks[i]->dst, "hdc") || !src)
+                    if (STRNEQ(def->disks[i]->dst, "hdc") || !src)
                         break;
 
                     virBufferEscapeSexpr(&buf, "(cdrom '%s')", src);

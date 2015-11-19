@@ -1461,7 +1461,7 @@ qemuAgentGetVCPUs(qemuAgentPtr mon,
     virJSONValuePtr cmd;
     virJSONValuePtr reply = NULL;
     virJSONValuePtr data = NULL;
-    int ndata;
+    ssize_t ndata;
 
     if (!(cmd = qemuAgentMakeCommand("guest-get-vcpus", NULL)))
         return -1;
@@ -1601,9 +1601,13 @@ qemuAgentUpdateCPUInfo(unsigned int nvcpus,
     size_t i;
     int nonline = 0;
     int nofflinable = 0;
+    ssize_t cpu0 = -1;
 
     /* count the active and offlinable cpus */
     for (i = 0; i < ncpuinfo; i++) {
+        if (cpuinfo[i].id == 0)
+            cpu0 = i;
+
         if (cpuinfo[i].online)
             nonline++;
 
@@ -1616,6 +1620,15 @@ qemuAgentUpdateCPUInfo(unsigned int nvcpus,
                            _("Invalid data provided by guest agent"));
             return -1;
         }
+    }
+
+    /* CPU0 was made offlinable in linux a while ago, but certain parts (suspend
+     * to ram) of the kernel still don't cope well with that. Make sure that if
+     * all remaining vCPUs are offlinable, vCPU0 will not be selected to be
+     * offlined automatically */
+    if (nofflinable == nonline && cpu0 >= 0 && cpuinfo[cpu0].online) {
+        cpuinfo[cpu0].offlinable = false;
+        nofflinable--;
     }
 
     /* the guest agent reported less cpus than requested */
@@ -1754,7 +1767,7 @@ qemuAgentGetFSInfo(qemuAgentPtr mon, virDomainFSInfoPtr **info,
 {
     size_t i, j, k;
     int ret = -1;
-    int ndata = 0, ndisk;
+    ssize_t ndata = 0, ndisk;
     char **alias;
     virJSONValuePtr cmd;
     virJSONValuePtr reply = NULL;
@@ -1797,7 +1810,7 @@ qemuAgentGetFSInfo(qemuAgentPtr mon, virDomainFSInfoPtr **info,
 
         if (!entry) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
-                           _("array element '%zd' of '%d' missing in "
+                           _("array element '%zd' of '%zd' missing in "
                              "guest-get-fsinfo return data"),
                            i, ndata);
             goto cleanup;
@@ -1858,7 +1871,7 @@ qemuAgentGetFSInfo(qemuAgentPtr mon, virDomainFSInfoPtr **info,
 
             if (!disk) {
                 virReportError(VIR_ERR_INTERNAL_ERROR,
-                               _("array element '%zd' of '%d' missing in "
+                               _("array element '%zd' of '%zd' missing in "
                                  "guest-get-fsinfo 'disk' data"),
                                j, ndisk);
                 goto cleanup;
@@ -1941,7 +1954,7 @@ qemuAgentGetInterfaces(qemuAgentPtr mon,
 {
     int ret = -1;
     size_t i, j;
-    int size = -1;
+    ssize_t size = -1;
     virJSONValuePtr cmd = NULL;
     virJSONValuePtr reply = NULL;
     virJSONValuePtr ret_array = NULL;
@@ -1981,7 +1994,7 @@ qemuAgentGetInterfaces(qemuAgentPtr mon,
         virJSONValuePtr tmp_iface = virJSONValueArrayGet(ret_array, i);
         virJSONValuePtr ip_addr_arr = NULL;
         const char *hwaddr, *ifname_s, *name = NULL;
-        int ip_addr_arr_size;
+        ssize_t ip_addr_arr_size;
         virDomainInterfacePtr iface = NULL;
 
         /* Shouldn't happen but doesn't hurt to check neither */

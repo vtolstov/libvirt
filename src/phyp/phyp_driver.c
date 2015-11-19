@@ -335,7 +335,7 @@ phypCapsInit(void)
      * unexpected failures. We don't want to break the QEMU
      * driver in this scenario, so log errors & carry on
      */
-    if (nodeCapsInitNUMA(caps) < 0) {
+    if (nodeCapsInitNUMA(NULL, caps) < 0) {
         virCapabilitiesFreeNUMAInfo(caps);
         VIR_WARN
             ("Failed to query host NUMA topology, disabling NUMA capabilities");
@@ -1249,9 +1249,8 @@ phypConnectClose(virConnectPtr conn)
     virObjectUnref(phyp_driver->xmlopt);
     phypUUIDTable_Free(phyp_driver->uuid_table);
     VIR_FREE(phyp_driver->managed_system);
-    VIR_FREE(phyp_driver);
-
     VIR_FORCE_CLOSE(phyp_driver->sock);
+    VIR_FREE(phyp_driver);
     return 0;
 }
 
@@ -3282,7 +3281,7 @@ phypDomainGetXMLDesc(virDomainPtr dom, unsigned int flags)
         goto err;
     }
 
-    virDomainDefSetMemoryInitial(&def, memory);
+    virDomainDefSetMemoryTotal(&def, memory);
 
     if ((def.mem.cur_balloon =
          phypGetLparMem(dom->conn, managed_system, dom->id, 1)) == 0) {

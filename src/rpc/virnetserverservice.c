@@ -328,7 +328,7 @@ virNetServerServicePtr virNetServerServiceNewPostExecRestart(virJSONValuePtr obj
     virNetServerServicePtr svc;
     virJSONValuePtr socks;
     size_t i;
-    int n;
+    ssize_t n;
     unsigned int max;
 
     if (virNetServerServiceInitialize() < 0)
@@ -520,6 +520,9 @@ void virNetServerServiceClose(virNetServerServicePtr svc)
     if (!svc)
         return;
 
-    for (i = 0; i < svc->nsocks; i++)
+    for (i = 0; i < svc->nsocks; i++) {
+        virNetSocketRemoveIOCallback(svc->socks[i]);
         virNetSocketClose(svc->socks[i]);
+        virObjectUnref(svc);
+    }
 }

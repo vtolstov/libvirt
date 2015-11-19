@@ -220,7 +220,7 @@ virNetDevMacVLanCreate(const char *ifname,
  */
 int virNetDevMacVLanDelete(const char *ifname)
 {
-    return virNetlinkDelLink(ifname);
+    return virNetlinkDelLink(ifname, NULL);
 }
 
 
@@ -473,16 +473,16 @@ virNetDevMacVLanVPortProfileCallback(struct nlmsghdr *hdr,
     case RTM_DELLINK:
     case RTM_SETLINK:
     case RTM_GETLINK:
-        VIR_DEBUG(" IFINFOMSG\n");
-        VIR_DEBUG("        ifi_family = 0x%02x\n",
+        VIR_DEBUG(" IFINFOMSG");
+        VIR_DEBUG("        ifi_family = 0x%02x",
             ((struct ifinfomsg *)data)->ifi_family);
-        VIR_DEBUG("        ifi_type   = 0x%x\n",
+        VIR_DEBUG("        ifi_type   = 0x%x",
             ((struct ifinfomsg *)data)->ifi_type);
-        VIR_DEBUG("        ifi_index  = %i\n",
+        VIR_DEBUG("        ifi_index  = %i",
             ((struct ifinfomsg *)data)->ifi_index);
-        VIR_DEBUG("        ifi_flags  = 0x%04x\n",
+        VIR_DEBUG("        ifi_flags  = 0x%04x",
             ((struct ifinfomsg *)data)->ifi_flags);
-        VIR_DEBUG("        ifi_change = 0x%04x\n",
+        VIR_DEBUG("        ifi_change = 0x%04x",
             ((struct ifinfomsg *)data)->ifi_change);
     }
     /* DEBUG end */
@@ -544,23 +544,23 @@ virNetDevMacVLanVPortProfileCallback(struct nlmsghdr *hdr,
 
     if (tb[IFLA_IFNAME]) {
         ifname = (char *)RTA_DATA(tb[IFLA_IFNAME]);
-        VIR_DEBUG("IFLA_IFNAME = %s\n", ifname);
+        VIR_DEBUG("IFLA_IFNAME = %s", ifname);
     }
 
     if (tb[IFLA_OPERSTATE]) {
         rem = *(unsigned short *)RTA_DATA(tb[IFLA_OPERSTATE]);
-        VIR_DEBUG("IFLA_OPERSTATE = %d\n", rem);
+        VIR_DEBUG("IFLA_OPERSTATE = %d", rem);
     }
 
     if (tb[IFLA_VF_PORTS]) {
         struct nlattr *tb_vf_ports;
 
-        VIR_DEBUG("found IFLA_VF_PORTS\n");
+        VIR_DEBUG("found IFLA_VF_PORTS");
         nla_for_each_nested(tb_vf_ports, tb[IFLA_VF_PORTS], rem) {
 
-            VIR_DEBUG("iterating\n");
+            VIR_DEBUG("iterating");
             if (nla_type(tb_vf_ports) != IFLA_VF_PORT) {
-                VIR_DEBUG("not a IFLA_VF_PORT. skipping\n");
+                VIR_DEBUG("not a IFLA_VF_PORT. skipping");
                 continue;
             }
             if (nla_parse_nested(tb3, IFLA_PORT_MAX, tb_vf_ports,
@@ -600,7 +600,7 @@ virNetDevMacVLanVPortProfileCallback(struct nlmsghdr *hdr,
                 uuid = (unsigned char *)
                     RTA_DATA(tb3[IFLA_PORT_INSTANCE_UUID]);
                 instance2str(uuid, instance, sizeof(instance));
-                VIR_DEBUG("IFLA_PORT_INSTANCE_UUID = %s\n",
+                VIR_DEBUG("IFLA_PORT_INSTANCE_UUID = %s",
                           instance);
             }
 
@@ -615,7 +615,7 @@ virNetDevMacVLanVPortProfileCallback(struct nlmsghdr *hdr,
             }
 
             if (tb3[IFLA_PORT_RESPONSE]) {
-                VIR_DEBUG("IFLA_PORT_RESPONSE = %d\n", *(uint16_t *)
+                VIR_DEBUG("IFLA_PORT_RESPONSE = %d", *(uint16_t *)
                     RTA_DATA(tb3[IFLA_PORT_RESPONSE]));
             }
         }
@@ -778,9 +778,22 @@ int virNetDevMacVLanCreateWithVPortProfile(const char *tgifname,
      * This is especially important when using SRIOV capable cards that
      * emulate their switch in firmware.
      */
+
     if (mode == VIR_NETDEV_MACVLAN_MODE_PASSTHRU) {
-        if (virNetDevReplaceNetConfig(linkdev, -1, macaddress, -1, stateDir) < 0)
-            return -1;
+        if (virtPortProfile &&
+            virtPortProfile->virtPortType == VIR_NETDEV_VPORT_PROFILE_8021QBH) {
+            /* The Cisco enic driver (the only card that uses
+             * 802.1Qbh) doesn't support IFLA_VFINFO_LIST, which is
+             * required for virNetDevReplaceNetConfig(), so we must
+             * use this function (which uses ioctl(SIOCGIFHWADDR)
+             * instead or virNetDevReplaceNetConfig()
+             */
+            if (virNetDevReplaceMacAddress(linkdev, macaddress, stateDir) < 0)
+                return -1;
+        } else {
+            if (virNetDevReplaceNetConfig(linkdev, -1, macaddress, -1, stateDir) < 0)
+                return -1;
+        }
     }
 
     if (tgifname) {
@@ -913,8 +926,13 @@ int virNetDevMacVLanDeleteWithVPortProfile(const char *ifname,
     int ret = 0;
     int vf = -1;
 
-    if (mode == VIR_NETDEV_MACVLAN_MODE_PASSTHRU)
-        ignore_value(virNetDevRestoreNetConfig(linkdev, vf, stateDir));
+    if (mode == VIR_NETDEV_MACVLAN_MODE_PASSTHRU) {
+        if (virtPortProfile &&
+             virtPortProfile->virtPortType == VIR_NETDEV_VPORT_PROFILE_8021QBH)
+            ignore_value(virNetDevRestoreMacAddress(linkdev, stateDir));
+        else
+            ignore_value(virNetDevRestoreNetConfig(linkdev, vf, stateDir));
+    }
 
     if (ifname) {
         if (virNetDevVPortProfileDisassociate(ifname,

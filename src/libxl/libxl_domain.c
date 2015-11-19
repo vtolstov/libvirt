@@ -223,9 +223,11 @@ libxlDomainObjPrivateFree(void *data)
 }
 
 static int
-libxlDomainObjPrivateXMLParse(xmlXPathContextPtr ctxt, void *data)
+libxlDomainObjPrivateXMLParse(xmlXPathContextPtr ctxt,
+                              virDomainObjPtr vm,
+                              virDomainDefParserConfigPtr config ATTRIBUTE_UNUSED)
 {
-    libxlDomainObjPrivatePtr priv = data;
+    libxlDomainObjPrivatePtr priv = vm->privateData;
 
     priv->lockState = virXPathString("string(./lockstate)", ctxt);
 
@@ -233,9 +235,10 @@ libxlDomainObjPrivateXMLParse(xmlXPathContextPtr ctxt, void *data)
 }
 
 static int
-libxlDomainObjPrivateXMLFormat(virBufferPtr buf, void *data)
+libxlDomainObjPrivateXMLFormat(virBufferPtr buf,
+                               virDomainObjPtr vm)
 {
-    libxlDomainObjPrivatePtr priv = data;
+    libxlDomainObjPrivatePtr priv = vm->privateData;
 
     if (priv->lockState)
         virBufferAsprintf(buf, "<lockstate>%s</lockstate>\n", priv->lockState);
@@ -395,7 +398,6 @@ libxlDomainShutdownThread(void *opaque)
     libxlDriverPrivatePtr driver = shutdown_info->driver;
     virObjectEventPtr dom_event = NULL;
     libxl_shutdown_reason xl_reason = ev->u.domain_shutdown.shutdown_reason;
-    virDomainShutoffReason reason = VIR_DOMAIN_SHUTOFF_SHUTDOWN;
     libxlDriverConfigPtr cfg;
 
     cfg = libxlDriverConfigGet(driver);
@@ -404,12 +406,14 @@ libxlDomainShutdownThread(void *opaque)
         goto cleanup;
 
     if (xl_reason == LIBXL_SHUTDOWN_REASON_POWEROFF) {
+        virDomainObjSetState(vm, VIR_DOMAIN_SHUTOFF,
+                             VIR_DOMAIN_SHUTOFF_SHUTDOWN);
+
         dom_event = virDomainEventLifecycleNewFromObj(vm,
                                            VIR_DOMAIN_EVENT_STOPPED,
                                            VIR_DOMAIN_EVENT_STOPPED_SHUTDOWN);
         switch ((virDomainLifecycleAction) vm->def->onPoweroff) {
         case VIR_DOMAIN_LIFECYCLE_DESTROY:
-            reason = VIR_DOMAIN_SHUTOFF_SHUTDOWN;
             goto destroy;
         case VIR_DOMAIN_LIFECYCLE_RESTART:
         case VIR_DOMAIN_LIFECYCLE_RESTART_RENAME:
@@ -419,12 +423,14 @@ libxlDomainShutdownThread(void *opaque)
             goto endjob;
         }
     } else if (xl_reason == LIBXL_SHUTDOWN_REASON_CRASH) {
+        virDomainObjSetState(vm, VIR_DOMAIN_SHUTOFF,
+                             VIR_DOMAIN_SHUTOFF_CRASHED);
+
         dom_event = virDomainEventLifecycleNewFromObj(vm,
                                            VIR_DOMAIN_EVENT_STOPPED,
                                            VIR_DOMAIN_EVENT_STOPPED_CRASHED);
         switch ((virDomainLifecycleCrashAction) vm->def->onCrash) {
         case VIR_DOMAIN_LIFECYCLE_CRASH_DESTROY:
-            reason = VIR_DOMAIN_SHUTOFF_CRASHED;
             goto destroy;
         case VIR_DOMAIN_LIFECYCLE_CRASH_RESTART:
         case VIR_DOMAIN_LIFECYCLE_CRASH_RESTART_RENAME:
@@ -440,12 +446,14 @@ libxlDomainShutdownThread(void *opaque)
             goto restart;
         }
     } else if (xl_reason == LIBXL_SHUTDOWN_REASON_REBOOT) {
+        virDomainObjSetState(vm, VIR_DOMAIN_SHUTOFF,
+                             VIR_DOMAIN_SHUTOFF_SHUTDOWN);
+
         dom_event = virDomainEventLifecycleNewFromObj(vm,
                                            VIR_DOMAIN_EVENT_STOPPED,
                                            VIR_DOMAIN_EVENT_STOPPED_SHUTDOWN);
         switch ((virDomainLifecycleAction) vm->def->onReboot) {
         case VIR_DOMAIN_LIFECYCLE_DESTROY:
-            reason = VIR_DOMAIN_SHUTOFF_SHUTDOWN;
             goto destroy;
         case VIR_DOMAIN_LIFECYCLE_RESTART:
         case VIR_DOMAIN_LIFECYCLE_RESTART_RENAME:
@@ -465,7 +473,7 @@ libxlDomainShutdownThread(void *opaque)
         dom_event = NULL;
     }
     libxlDomainDestroyInternal(driver, vm);
-    libxlDomainCleanup(driver, vm, reason);
+    libxlDomainCleanup(driver, vm);
     if (!vm->persistent)
         virDomainObjListRemove(driver->domains, vm);
 
@@ -477,7 +485,7 @@ libxlDomainShutdownThread(void *opaque)
         dom_event = NULL;
     }
     libxlDomainDestroyInternal(driver, vm);
-    libxlDomainCleanup(driver, vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN);
+    libxlDomainCleanup(driver, vm);
     if (libxlDomainStart(driver, vm, false, -1) < 0) {
         virErrorPtr err = virGetLastError();
         VIR_ERROR(_("Failed to restart VM '%s': %s"),
@@ -683,8 +691,7 @@ libxlDomainDestroyInternal(libxlDriverPrivatePtr driver,
  */
 void
 libxlDomainCleanup(libxlDriverPrivatePtr driver,
-                   virDomainObjPtr vm,
-                   virDomainShutoffReason reason)
+                   virDomainObjPtr vm)
 {
     libxlDomainObjPrivatePtr priv = vm->privateData;
     libxlDriverConfigPtr cfg = libxlDriverConfigGet(driver);
@@ -706,9 +713,6 @@ libxlDomainCleanup(libxlDriverPrivatePtr driver,
         libxl_evdisable_domain_death(cfg->ctx, priv->deathW);
         priv->deathW = NULL;
     }
-
-    if (vm->persistent)
-        virDomainObjSetState(vm, VIR_DOMAIN_SHUTOFF, reason);
 
     if (virAtomicIntDecAndTest(&driver->nactive) && driver->inhibitCallback)
         driver->inhibitCallback(false, driver->inhibitOpaque);
@@ -789,6 +793,8 @@ libxlDomainSetVcpuAffinities(libxlDriverPrivatePtr driver, virDomainObjPtr vm)
     size_t i;
     int ret = -1;
 
+    libxl_bitmap_init(&map);
+
     for (i = 0; i < vm->def->cputune.nvcpupin; ++i) {
         pin = vm->def->cputune.vcpupin[i];
         cpumask = pin->cpumask;
@@ -802,13 +808,13 @@ libxlDomainSetVcpuAffinities(libxlDriverPrivatePtr driver, virDomainObjPtr vm)
             goto cleanup;
         }
 
-        VIR_FREE(map.map);
+        libxl_bitmap_dispose(&map); /* Also returns to freshly-init'd state */
     }
 
     ret = 0;
 
  cleanup:
-    VIR_FREE(map.map);
+    libxl_bitmap_dispose(&map);
     virObjectUnref(cfg);
     return ret;
 }

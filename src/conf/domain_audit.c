@@ -427,7 +427,7 @@ virDomainAuditHostdev(virDomainObjPtr vm, virDomainHostdevDefPtr hostdev,
             } else {
                 virDomainHostdevSubsysSCSIHostPtr scsihostsrc =
                     &scsisrc->u.host;
-                if (virAsprintfQuiet(&address, "%s:%d:%d:%d",
+                if (virAsprintfQuiet(&address, "%s:%u:%u:%llu",
                                      scsihostsrc->adapter, scsihostsrc->bus,
                                      scsihostsrc->target,
                                      scsihostsrc->unit) < 0) {
@@ -883,10 +883,11 @@ virDomainAuditStart(virDomainObjPtr vm, const char *reason, bool success)
     if (vm->def->tpm)
         virDomainAuditTPM(vm, vm->def->tpm, "start", true);
 
-    virDomainAuditMemory(vm, 0, vm->def->mem.cur_balloon, "start", true);
+    virDomainAuditMemory(vm, 0, virDomainDefGetMemoryActual(vm->def),
+                         "start", true);
     virDomainAuditVcpu(vm, 0, vm->def->vcpus, "start", true);
-    if (vm->def->iothreads)
-        virDomainAuditIOThread(vm, 0, vm->def->iothreads, "start", true);
+    if (vm->def->niothreadids)
+        virDomainAuditIOThread(vm, 0, vm->def->niothreadids, "start", true);
 
     virDomainAuditLifecycle(vm, "start", reason, success);
 }

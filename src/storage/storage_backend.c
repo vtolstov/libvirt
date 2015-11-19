@@ -342,12 +342,11 @@ virStorageBackendCreateBlockFrom(virConnectPtr conn ATTRIBUTE_UNUSED,
         goto cleanup;
     }
 
-    remain = vol->target.allocation;
+    remain = vol->target.capacity;
 
     if (inputvol) {
-        int res = virStorageBackendCopyToFD(vol, inputvol,
-                                            fd, &remain, false, reflink_copy);
-        if (res < 0)
+        if (virStorageBackendCopyToFD(vol, inputvol, fd, &remain,
+                                      false, reflink_copy) < 0)
             goto cleanup;
     }
 
@@ -399,7 +398,13 @@ createRawFile(int fd, virStorageVolDefPtr vol,
 {
     bool need_alloc = true;
     int ret = 0;
-    unsigned long long remain;
+    unsigned long long pos = 0;
+
+    /* If the new allocation is lower than the capacity of the original file,
+     * the cloned volume will be sparse */
+    if (inputvol &&
+        vol->target.allocation < inputvol->target.capacity)
+        need_alloc = false;
 
     /* Seek to the final size, so the capacity is available upfront
      * for progress reporting */
@@ -420,7 +425,7 @@ createRawFile(int fd, virStorageVolDefPtr vol,
      * to writing zeroes block by block in case fallocate isn't
      * available, and since we're going to copy data from another
      * file it doesn't make sense to write the file twice. */
-    if (vol->target.allocation) {
+    if (vol->target.allocation && need_alloc) {
         if (fallocate(fd, 0, 0, vol->target.allocation) == 0) {
             need_alloc = false;
         } else if (errno != ENOSYS && errno != EOPNOTSUPP) {
@@ -433,23 +438,23 @@ createRawFile(int fd, virStorageVolDefPtr vol,
     }
 #endif
 
-    remain = vol->target.allocation;
-
     if (inputvol) {
+        unsigned long long remain = inputvol->target.capacity;
         /* allow zero blocks to be skipped if we've requested sparse
          * allocation (allocation < capacity) or we have already
          * been able to allocate the required space. */
-        bool want_sparse = !need_alloc ||
-            (vol->target.allocation < inputvol->target.capacity);
-
-        ret = virStorageBackendCopyToFD(vol, inputvol, fd, &remain,
-                                        want_sparse, reflink_copy);
-        if (ret < 0)
+        if ((ret = virStorageBackendCopyToFD(vol, inputvol, fd, &remain,
+                                             !need_alloc, reflink_copy)) < 0)
             goto cleanup;
+
+        /* If the new allocation is greater than the original capacity,
+         * but fallocate failed, fill the rest with zeroes.
+         */
+        pos = inputvol->target.capacity - remain;
     }
 
-    if (remain && need_alloc) {
-        if (safezero(fd, vol->target.allocation - remain, remain) < 0) {
+    if (need_alloc && (vol->target.allocation - pos > 0)) {
+        if (safezero(fd, pos, vol->target.allocation - pos) < 0) {
             ret = -errno;
             virReportSystemError(errno, _("cannot fill file '%s'"),
                                  vol->target.path);
@@ -479,6 +484,8 @@ virStorageBackendCreateRaw(virConnectPtr conn ATTRIBUTE_UNUSED,
     int fd = -1;
     int operation_flags;
     bool reflink_copy = false;
+    mode_t open_mode = VIR_STORAGE_DEFAULT_VOL_PERM_MODE;
+    bool created = false;
 
     virCheckFlags(VIR_STORAGE_VOL_CREATE_PREALLOC_METADATA |
                   VIR_STORAGE_VOL_CREATE_REFLINK,
@@ -511,11 +518,12 @@ virStorageBackendCreateRaw(virConnectPtr conn ATTRIBUTE_UNUSED,
     if (pool->def->type == VIR_STORAGE_POOL_NETFS)
         operation_flags |= VIR_FILE_OPEN_FORK;
 
+    if (vol->target.perms->mode != (mode_t) -1)
+        open_mode = vol->target.perms->mode;
+
     if ((fd = virFileOpenAs(vol->target.path,
                             O_RDWR | O_CREAT | O_EXCL,
-                            (vol->target.perms->mode ?
-                             VIR_STORAGE_DEFAULT_VOL_PERM_MODE :
-                             vol->target.perms->mode),
+                            open_mode,
                             vol->target.perms->uid,
                             vol->target.perms->gid,
                             operation_flags)) < 0) {
@@ -524,6 +532,7 @@ virStorageBackendCreateRaw(virConnectPtr conn ATTRIBUTE_UNUSED,
                              vol->target.path);
         goto cleanup;
     }
+    created = true;
 
     if (vol->target.nocow) {
 #ifdef __linux__
@@ -550,6 +559,10 @@ virStorageBackendCreateRaw(virConnectPtr conn ATTRIBUTE_UNUSED,
         ret = -1;
 
  cleanup:
+    if (ret < 0 && created)
+        ignore_value(virFileRemove(vol->target.path,
+                                   vol->target.perms->uid,
+                                   vol->target.perms->gid));
     VIR_FORCE_CLOSE(fd);
     return ret;
 }
@@ -670,8 +683,11 @@ virStorageBackendCreateExecCommand(virStoragePoolObjPtr pool,
     struct stat st;
     gid_t gid;
     uid_t uid;
-    mode_t mode;
+    mode_t mode = (vol->target.perms->mode == (mode_t) -1 ?
+                   VIR_STORAGE_DEFAULT_VOL_PERM_MODE :
+                   vol->target.perms->mode);
     bool filecreated = false;
+    int ret = -1;
 
     if ((pool->def->type == VIR_STORAGE_POOL_NETFS)
         && (((geteuid() == 0)
@@ -682,6 +698,7 @@ virStorageBackendCreateExecCommand(virStoragePoolObjPtr pool,
 
         virCommandSetUID(cmd, vol->target.perms->uid);
         virCommandSetGID(cmd, vol->target.perms->gid);
+        virCommandSetUmask(cmd, S_IRWXUGO ^ mode);
 
         if (virCommandRun(cmd, NULL) == 0) {
             /* command was successfully run, check if the file was created */
@@ -690,18 +707,20 @@ virStorageBackendCreateExecCommand(virStoragePoolObjPtr pool,
         }
     }
 
-    /* don't change uid/gid if we retry */
-    virCommandSetUID(cmd, -1);
-    virCommandSetGID(cmd, -1);
-
     if (!filecreated) {
+        /* don't change uid/gid/mode if we retry */
+        virCommandSetUID(cmd, -1);
+        virCommandSetGID(cmd, -1);
+        virCommandSetUmask(cmd, 0);
+
         if (virCommandRun(cmd, NULL) < 0)
-            return -1;
+            goto cleanup;
         if (stat(vol->target.path, &st) < 0) {
             virReportSystemError(errno,
                                  _("failed to create %s"), vol->target.path);
-            return -1;
+            goto cleanup;
         }
+        filecreated = true;
     }
 
     uid = (vol->target.perms->uid != st.st_uid) ? vol->target.perms->uid
@@ -714,18 +733,24 @@ virStorageBackendCreateExecCommand(virStoragePoolObjPtr pool,
                              _("cannot chown %s to (%u, %u)"),
                              vol->target.path, (unsigned int) uid,
                              (unsigned int) gid);
-        return -1;
+        goto cleanup;
     }
 
-    mode = (vol->target.perms->mode == (mode_t) -1 ?
-            VIR_STORAGE_DEFAULT_VOL_PERM_MODE : vol->target.perms->mode);
-    if (chmod(vol->target.path, mode) < 0) {
+    if (mode != (st.st_mode & S_IRWXUGO) &&
+        chmod(vol->target.path, mode) < 0) {
         virReportSystemError(errno,
                              _("cannot set mode of '%s' to %04o"),
                              vol->target.path, mode);
-        return -1;
+        goto cleanup;
     }
-    return 0;
+
+    ret = 0;
+
+ cleanup:
+    if (ret < 0 && filecreated)
+        virFileRemove(vol->target.path, vol->target.perms->uid,
+                      vol->target.perms->gid);
+    return ret;
 }
 
 enum {
@@ -1068,7 +1093,7 @@ virStorageBackendCreateQemuImgCmdFromVol(virConnectPtr conn,
     if (info.inputPath)
         virCommandAddArg(cmd, info.inputPath);
     virCommandAddArg(cmd, info.path);
-    if (!info.inputPath && info.size_arg)
+    if (!info.inputPath && (info.size_arg || !info.backingPath))
         virCommandAddArgFormat(cmd, "%lluK", info.size_arg);
 
     return cmd;

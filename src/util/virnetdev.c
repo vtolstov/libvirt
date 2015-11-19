@@ -87,6 +87,17 @@ VIR_LOG_INIT("util.netdev");
 # define VIR_IFF_ALLMULTI 0
 #endif
 
+#define RESOURCE_FILE_LEN 4096
+#if HAVE_DECL_ETHTOOL_GFEATURES
+# define TX_UDP_TNL 25
+# define GFEATURES_SIZE 2
+# define FEATURE_WORD(blocks, index, field)  ((blocks)[(index) / 32U].field)
+# define FEATURE_FIELD_FLAG(index)      (1U << (index) % 32U)
+# define FEATURE_BIT_IS_SET(blocks, index, field)        \
+    (FEATURE_WORD(blocks, index, field) & FEATURE_FIELD_FLAG(index))
+#endif
+#define VIR_DAD_WAIT_TIMEOUT 20 /* seconds */
+
 typedef enum {
     VIR_MCAST_TYPE_INDEX_TOKEN,
     VIR_MCAST_TYPE_NAME_TOKEN,
@@ -348,6 +359,92 @@ int virNetDevGetMAC(const char *ifname,
     return -1;
 }
 #endif
+
+
+/**
+ * virNetDevReplaceMacAddress:
+ * @macaddress: new MAC address for interface
+ * @linkdev: name of interface
+ * @stateDir: directory to store old MAC address
+ *
+ * Returns 0 on success, -1 on failure
+ *
+ */
+int
+virNetDevReplaceMacAddress(const char *linkdev,
+                           const virMacAddr *macaddress,
+                           const char *stateDir)
+{
+    virMacAddr oldmac;
+    char *path = NULL;
+    char macstr[VIR_MAC_STRING_BUFLEN];
+    int ret = -1;
+
+    if (virNetDevGetMAC(linkdev, &oldmac) < 0)
+        return -1;
+
+    if (virAsprintf(&path, "%s/%s",
+                    stateDir,
+                    linkdev) < 0)
+        return -1;
+    virMacAddrFormat(&oldmac, macstr);
+    if (virFileWriteStr(path, macstr, O_CREAT|O_TRUNC|O_WRONLY) < 0) {
+        virReportSystemError(errno, _("Unable to preserve mac for %s"),
+                             linkdev);
+        goto cleanup;
+    }
+
+    if (virNetDevSetMAC(linkdev, macaddress) < 0)
+        goto cleanup;
+
+    ret = 0;
+ cleanup:
+    VIR_FREE(path);
+    return ret;
+}
+
+/**
+ * virNetDevRestoreMacAddress:
+ * @linkdev: name of interface
+ * @stateDir: directory containing old MAC address
+ *
+ * Returns 0 on success, -errno on failure.
+ *
+ */
+int
+virNetDevRestoreMacAddress(const char *linkdev,
+                           const char *stateDir)
+{
+    int rc = -1;
+    char *oldmacname = NULL;
+    char *macstr = NULL;
+    char *path = NULL;
+    virMacAddr oldmac;
+
+    if (virAsprintf(&path, "%s/%s",
+                    stateDir,
+                    linkdev) < 0)
+        return -1;
+
+    if (virFileReadAll(path, VIR_MAC_STRING_BUFLEN, &macstr) < 0)
+        goto cleanup;
+
+    if (virMacAddrParse(macstr, &oldmac) != 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("Cannot parse MAC address from '%s'"),
+                       oldmacname);
+        goto cleanup;
+    }
+
+    /*reset mac and remove file-ignore results*/
+    rc = virNetDevSetMAC(linkdev, &oldmac);
+    ignore_value(unlink(path));
+
+ cleanup:
+    VIR_FREE(macstr);
+    VIR_FREE(path);
+    return rc;
+}
 
 
 #if defined(SIOCGIFMTU) && defined(HAVE_STRUCT_IFREQ)
@@ -1209,6 +1306,112 @@ int virNetDevClearIPAddress(const char *ifname,
     return ret;
 }
 
+/* return true if there is a known address with 'tentative' flag set */
+static bool
+virNetDevParseDadStatus(struct nlmsghdr *nlh, int len,
+                        virSocketAddrPtr *addrs, size_t count)
+{
+    struct ifaddrmsg *ifaddrmsg_ptr;
+    unsigned int ifaddrmsg_len;
+    struct rtattr *rtattr_ptr;
+    size_t i;
+    struct in6_addr *addr;
+    for (; NLMSG_OK(nlh, len); nlh = NLMSG_NEXT(nlh, len)) {
+        if (NLMSG_PAYLOAD(nlh, 0) < sizeof(struct ifaddrmsg)) {
+            /* Message without payload is the last one. */
+            break;
+        }
+
+        ifaddrmsg_ptr = (struct ifaddrmsg *)NLMSG_DATA(nlh);
+        if (!(ifaddrmsg_ptr->ifa_flags & IFA_F_TENTATIVE)) {
+            /* Not tentative: we are not interested in this entry. */
+            continue;
+        }
+
+        ifaddrmsg_len = IFA_PAYLOAD(nlh);
+        rtattr_ptr = (struct rtattr *) IFA_RTA(ifaddrmsg_ptr);
+        for (; RTA_OK(rtattr_ptr, ifaddrmsg_len);
+            rtattr_ptr = RTA_NEXT(rtattr_ptr, ifaddrmsg_len)) {
+            if (RTA_PAYLOAD(rtattr_ptr) != sizeof(struct in6_addr)) {
+                /* No address: ignore. */
+                continue;
+            }
+
+            /* We check only known addresses. */
+            for (i = 0; i < count; i++) {
+                addr = &addrs[i]->data.inet6.sin6_addr;
+                if (!memcmp(addr, RTA_DATA(rtattr_ptr),
+                            sizeof(struct in6_addr))) {
+                    /* We found matching tentative address. */
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+/* return after DAD finishes for all known IPv6 addresses or an error */
+int
+virNetDevWaitDadFinish(virSocketAddrPtr *addrs, size_t count)
+{
+    struct nl_msg *nlmsg = NULL;
+    struct ifaddrmsg ifa;
+    struct nlmsghdr *resp = NULL;
+    unsigned int recvbuflen;
+    int ret = -1;
+    bool dad = true;
+    time_t max_time = time(NULL) + VIR_DAD_WAIT_TIMEOUT;
+
+    if (!(nlmsg = nlmsg_alloc_simple(RTM_GETADDR,
+                                     NLM_F_REQUEST | NLM_F_DUMP))) {
+        virReportOOMError();
+        return -1;
+    }
+
+    memset(&ifa, 0, sizeof(ifa));
+    /* DAD is for IPv6 adresses only. */
+    ifa.ifa_family = AF_INET6;
+    if (nlmsg_append(nlmsg, &ifa, sizeof(ifa), NLMSG_ALIGNTO) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                       _("allocated netlink buffer is too small"));
+        goto cleanup;
+    }
+
+    /* Periodically query netlink until DAD finishes on all known addresses. */
+    while (dad && time(NULL) < max_time) {
+        if (virNetlinkCommand(nlmsg, &resp, &recvbuflen, 0, 0,
+                              NETLINK_ROUTE, 0) < 0)
+            goto cleanup;
+
+        if (virNetlinkGetErrorCode(resp, recvbuflen) < 0) {
+            virReportError(VIR_ERR_SYSTEM_ERROR, "%s",
+                           _("error reading DAD state information"));
+            goto cleanup;
+        }
+
+        /* Parse response. */
+        dad = virNetDevParseDadStatus(resp, recvbuflen, addrs, count);
+        if (dad)
+            usleep(1000 * 10);
+
+        VIR_FREE(resp);
+    }
+    /* Check timeout. */
+    if (dad) {
+        virReportError(VIR_ERR_SYSTEM_ERROR,
+                       _("Duplicate Address Detection "
+                         "not finished in %d seconds"), VIR_DAD_WAIT_TIMEOUT);
+    } else {
+        ret = 0;
+    }
+
+ cleanup:
+    VIR_FREE(resp);
+    nlmsg_free(nlmsg);
+    return ret;
+}
+
 #else /* defined(__linux__) && defined(HAVE_LIBNL) */
 
 int virNetDevSetIPAddress(const char *ifname,
@@ -1326,6 +1529,16 @@ int virNetDevClearIPAddress(const char *ifname,
     VIR_FREE(addrstr);
     virCommandFree(cmd);
     return ret;
+}
+
+/* return after DAD finishes for all known IPv6 addresses or an error */
+int
+virNetDevWaitDadFinish(virSocketAddrPtr *addrs ATTRIBUTE_UNUSED,
+                       size_t count ATTRIBUTE_UNUSED)
+{
+    virReportSystemError(ENOSYS, "%s",
+                         _("Unable to wait for IPv6 DAD on this platform"));
+    return -1;
 }
 
 #endif /* defined(__linux__) && defined(HAVE_LIBNL) */
@@ -1828,94 +2041,9 @@ virNetDevSysfsFile(char **pf_sysfs_device_link ATTRIBUTE_UNUSED,
     return -1;
 }
 
+
 #endif /* !__linux__ */
 #if defined(__linux__) && defined(HAVE_LIBNL) && defined(IFLA_VF_MAX)
-
-/**
- * virNetDevReplaceMacAddress:
- * @macaddress: new MAC address for interface
- * @linkdev: name of interface
- * @stateDir: directory to store old MAC address
- *
- * Returns 0 on success, -1 on failure
- *
- */
-static int
-virNetDevReplaceMacAddress(const char *linkdev,
-                           const virMacAddr *macaddress,
-                           const char *stateDir)
-{
-    virMacAddr oldmac;
-    char *path = NULL;
-    char macstr[VIR_MAC_STRING_BUFLEN];
-    int ret = -1;
-
-    if (virNetDevGetMAC(linkdev, &oldmac) < 0)
-        return -1;
-
-    if (virAsprintf(&path, "%s/%s",
-                    stateDir,
-                    linkdev) < 0)
-        return -1;
-    virMacAddrFormat(&oldmac, macstr);
-    if (virFileWriteStr(path, macstr, O_CREAT|O_TRUNC|O_WRONLY) < 0) {
-        virReportSystemError(errno, _("Unable to preserve mac for %s"),
-                             linkdev);
-        goto cleanup;
-    }
-
-    if (virNetDevSetMAC(linkdev, macaddress) < 0)
-        goto cleanup;
-
-    ret = 0;
-
- cleanup:
-    VIR_FREE(path);
-    return ret;
-}
-
-/**
- * virNetDevRestoreMacAddress:
- * @linkdev: name of interface
- * @stateDir: directory containing old MAC address
- *
- * Returns 0 on success, -errno on failure.
- *
- */
-static int
-virNetDevRestoreMacAddress(const char *linkdev,
-                           const char *stateDir)
-{
-    int rc = -1;
-    char *oldmacname = NULL;
-    char *macstr = NULL;
-    char *path = NULL;
-    virMacAddr oldmac;
-
-    if (virAsprintf(&path, "%s/%s",
-                    stateDir,
-                    linkdev) < 0)
-        return -1;
-
-    if (virFileReadAll(path, VIR_MAC_STRING_BUFLEN, &macstr) < 0)
-        goto cleanup;
-
-    if (virMacAddrParse(macstr, &oldmac) != 0) {
-        virReportError(VIR_ERR_INTERNAL_ERROR,
-                       _("Cannot parse MAC address from '%s'"),
-                       oldmacname);
-        goto cleanup;
-    }
-
-    /*reset mac and remove file-ignore results*/
-    rc = virNetDevSetMAC(linkdev, &oldmac);
-    ignore_value(unlink(path));
-
- cleanup:
-    VIR_FREE(macstr);
-    VIR_FREE(path);
-    return rc;
-}
 
 
 static struct nla_policy ifla_vf_policy[IFLA_VF_MAX+1] = {
@@ -2699,7 +2827,7 @@ static int virNetDevParseMcast(char *buf, virNetDevMcastEntryPtr mcast)
     char *saveptr;
     char *endptr;
 
-    for (ifindex = 0, next = buf; ifindex < VIR_MCAST_TYPE_LAST; ifindex++,
+    for (ifindex = VIR_MCAST_TYPE_INDEX_TOKEN, next = buf; ifindex < VIR_MCAST_TYPE_LAST; ifindex++,
          next = NULL) {
         token = strtok_r(next, VIR_MCAST_TOKEN_DELIMS, &saveptr);
 
@@ -2858,9 +2986,9 @@ static int virNetDevGetMulticastTable(const char *ifname,
     }
 
     ret = 0;
+
  cleanup:
     virNetDevMcastListClear(&mcast);
-
     return ret;
 }
 
@@ -2946,8 +3074,73 @@ int virNetDevGetRxFilter(const char *ifname,
 #if defined(SIOCETHTOOL) && defined(HAVE_STRUCT_IFREQ)
 
 /**
- * virNetDevFeatureAvailable
- * This function checks for the availability of a network device feature
+ * virNetDevRDMAFeature
+ * This function checks for the availability of RDMA feature
+ * and add it to bitmap
+ *
+ * @ifname: name of the interface
+ * @out: add RDMA feature if exist to bitmap
+ *
+ * Returns 0 on success, -1 on failure.
+ */
+static int
+virNetDevRDMAFeature(const char *ifname,
+                     virBitmapPtr *out)
+{
+    char *eth_devpath = NULL;
+    char *ib_devpath = NULL;
+    char *eth_res_buf = NULL;
+    char *ib_res_buf = NULL;
+    DIR *dirp = NULL;
+    struct dirent *dp;
+    int ret = -1;
+
+    if (!virFileExists(SYSFS_INFINIBAND_DIR))
+        return 0;
+
+    if (!(dirp = opendir(SYSFS_INFINIBAND_DIR))) {
+        virReportSystemError(errno,
+                             _("Failed to opendir path '%s'"),
+                             SYSFS_INFINIBAND_DIR);
+        goto cleanup;
+    }
+
+    if (virAsprintf(&eth_devpath, SYSFS_NET_DIR "%s/device/resource", ifname) < 0)
+        goto cleanup;
+    if (!virFileExists(eth_devpath))
+        goto cleanup;
+    if (virFileReadAll(eth_devpath, RESOURCE_FILE_LEN, &eth_res_buf) < 0)
+        goto cleanup;
+
+    while (virDirRead(dirp, &dp, SYSFS_INFINIBAND_DIR) > 0) {
+        if (dp->d_name[0] == '.')
+            continue;
+        if (virAsprintf(&ib_devpath, SYSFS_INFINIBAND_DIR "%s/device/resource",
+                        dp->d_name) < 0)
+            continue;
+        if (virFileReadAll(ib_devpath, RESOURCE_FILE_LEN, &ib_res_buf) > 0 &&
+            STREQ(eth_res_buf, ib_res_buf)) {
+            ignore_value(virBitmapSetBit(*out, VIR_NET_DEV_FEAT_RDMA));
+            break;
+        }
+        VIR_FREE(ib_devpath);
+        VIR_FREE(ib_res_buf);
+    }
+    ret = 0;
+
+ cleanup:
+    closedir(dirp);
+    VIR_FREE(eth_devpath);
+    VIR_FREE(ib_devpath);
+    VIR_FREE(eth_res_buf);
+    VIR_FREE(ib_res_buf);
+    return ret;
+}
+
+
+/**
+ * virNetDevSendEthtoolIoctl
+ * This function sends ethtool ioctl request
  *
  * @ifname: name of the interface
  * @cmd: reference to an ethtool command structure
@@ -2955,31 +3148,26 @@ int virNetDevGetRxFilter(const char *ifname,
  * Returns 0 on success, -1 on failure.
  */
 static int
-virNetDevFeatureAvailable(const char *ifname, struct ethtool_value *cmd)
+virNetDevSendEthtoolIoctl(const char *ifname, void *cmd)
 {
     int ret = -1;
-    int sock = -1;
-    virIfreq ifr;
+    int fd = -1;
+    struct ifreq ifr;
 
-    sock = socket(AF_LOCAL, SOCK_DGRAM, 0);
-    if (sock < 0) {
-        virReportSystemError(errno, "%s", _("Cannot open control socket"));
-        goto cleanup;
-    }
+    /* Ultimately uses AF_PACKET for socket which requires privileged
+     * daemon support.
+     */
+    if ((fd = virNetDevSetupControl(ifname, &ifr)) < 0)
+        return ret;
 
-    memset(&ifr, 0, sizeof(ifr));
-    strcpy(ifr.ifr_name, ifname);
-    ifr.ifr_data = (void*) cmd;
-
-    if (ioctl(sock, SIOCETHTOOL, &ifr) != 0) {
+    ifr.ifr_data = cmd;
+    ret = ioctl(fd, SIOCETHTOOL, &ifr);
+    if (ret != 0) {
         switch (errno) {
-            case EPERM:
-                VIR_DEBUG("ethtool ioctl: permission denied");
-                break;
-            case EINVAL:
+            case EINVAL: /* kernel doesn't support SIOCETHTOOL */
                 VIR_DEBUG("ethtool ioctl: invalid request");
                 break;
-            case EOPNOTSUPP:
+            case EOPNOTSUPP: /* kernel doesn't support specific feature */
                 VIR_DEBUG("ethtool ioctl: request not supported");
                 break;
             default:
@@ -2988,13 +3176,54 @@ virNetDevFeatureAvailable(const char *ifname, struct ethtool_value *cmd)
         }
     }
 
-    ret = cmd->data > 0 ? 1: 0;
  cleanup:
-    if (sock)
-        VIR_FORCE_CLOSE(sock);
-
+    VIR_FORCE_CLOSE(fd);
     return ret;
 }
+
+
+/**
+* virNetDevFeatureAvailable
+* This function checks for the availability of a network device feature
+*
+* @ifname: name of the interface
+* @cmd: reference to an ethtool command structure
+*
+* Returns 0 if not found, 1 on success, and -1 on failure.
+*/
+static int
+virNetDevFeatureAvailable(const char *ifname, struct ethtool_value *cmd)
+{
+    int ret = -1;
+
+    cmd = (void*)cmd;
+    if (!virNetDevSendEthtoolIoctl(ifname, cmd))
+        ret = cmd->data > 0 ? 1 : 0;
+    return ret;
+}
+
+
+# if HAVE_DECL_ETHTOOL_GFEATURES
+/**
+ * virNetDevGFeatureAvailable
+ * This function checks for the availability of a network device gfeature
+ *
+ * @ifname: name of the interface
+ * @cmd: reference to a gfeatures ethtool command structure
+ *
+ * Returns 0 if not found, 1 on success, and -1 on failure.
+ */
+static int
+virNetDevGFeatureAvailable(const char *ifname, struct ethtool_gfeatures *cmd)
+{
+    int ret = -1;
+
+    cmd = (void*)cmd;
+    if (!virNetDevSendEthtoolIoctl(ifname, cmd))
+        ret = FEATURE_BIT_IS_SET(cmd->features, TX_UDP_TNL, active);
+    return ret;
+}
+# endif
 
 
 /**
@@ -3002,10 +3231,10 @@ virNetDevFeatureAvailable(const char *ifname, struct ethtool_value *cmd)
  * This function gets the nic offloads features available for ifname
  *
  * @ifname: name of the interface
- * @features: network device feature structures
- * @nfeatures: number of features available
+ * @out: bitmap of the available virNetDevFeature feature bits
  *
- * Returns 0 on success, -1 on failure.
+ * Returns 0 on success or if called from session mode, -1 on failure.
+ * If called from session mode, an empty bitmap is returned.
  */
 int
 virNetDevGetFeatures(const char *ifname,
@@ -3013,7 +3242,9 @@ virNetDevGetFeatures(const char *ifname,
 {
     size_t i = -1;
     struct ethtool_value cmd = { 0 };
-
+# if HAVE_DECL_ETHTOOL_GFEATURES
+    struct ethtool_gfeatures *g_cmd;
+# endif
     struct elem{
         const int cmd;
         const virNetDevFeature feat;
@@ -3035,9 +3266,15 @@ virNetDevGetFeatures(const char *ifname,
     if (!(*out = virBitmapNew(VIR_NET_DEV_FEAT_LAST)))
         return -1;
 
+    /* Only fetch features if we're privileged, but no need to fail */
+    if (geteuid() != 0) {
+        VIR_DEBUG("ETHTOOL feature bits not available in session mode");
+        return 0;
+    }
+
     for (i = 0; i < ARRAY_CARDINALITY(cmds); i++) {
         cmd.cmd = cmds[i].cmd;
-        if (virNetDevFeatureAvailable(ifname, &cmd))
+        if (virNetDevFeatureAvailable(ifname, &cmd) == 1)
             ignore_value(virBitmapSetBit(*out, cmds[i].feat));
     }
 
@@ -3061,7 +3298,7 @@ virNetDevGetFeatures(const char *ifname,
     };
 
     cmd.cmd = ETHTOOL_GFLAGS;
-    if (virNetDevFeatureAvailable(ifname, &cmd)) {
+    if (virNetDevFeatureAvailable(ifname, &cmd) == 1) {
         for (j = 0; j < ARRAY_CARDINALITY(flags); j++) {
             if (cmd.data & flags[j].cmd)
                 ignore_value(virBitmapSetBit(*out, flags[j].feat));
@@ -3069,6 +3306,19 @@ virNetDevGetFeatures(const char *ifname,
     }
 # endif
 
+# if HAVE_DECL_ETHTOOL_GFEATURES
+    if (VIR_ALLOC_VAR(g_cmd,
+                      struct ethtool_get_features_block, GFEATURES_SIZE) < 0)
+        return -1;
+    g_cmd->cmd = ETHTOOL_GFEATURES;
+    g_cmd->size = GFEATURES_SIZE;
+    if (virNetDevGFeatureAvailable(ifname, g_cmd) == 1)
+        ignore_value(virBitmapSetBit(*out, VIR_NET_DEV_FEAT_TXUDPTNL));
+    VIR_FREE(g_cmd);
+# endif
+
+    if (virNetDevRDMAFeature(ifname, out) < 0)
+        return -1;
     return 0;
 }
 #else

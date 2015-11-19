@@ -163,7 +163,7 @@ VIR_ENUM_IMPL(qemuMonitorMigrationStatus,
 
 VIR_ENUM_IMPL(qemuMonitorMigrationCaps,
               QEMU_MONITOR_MIGRATION_CAPS_LAST,
-              "xbzrle", "auto-converge", "rdma-pin-all")
+              "xbzrle", "auto-converge", "rdma-pin-all", "events")
 
 VIR_ENUM_IMPL(qemuMonitorVMStatus,
               QEMU_MONITOR_VM_STATUS_LAST,
@@ -406,6 +406,9 @@ qemuMonitorGetErrorFromLog(qemuMonitorPtr mon)
 
     if ((len = qemuProcessReadLog(mon->logfd, logbuf, 4096 - 1, 0, true)) <= 0)
         goto error;
+
+    while (len > 0 && logbuf[len - 1] == '\n')
+        logbuf[--len] = '\0';
 
  cleanup:
     errno = orig_errno;
@@ -835,7 +838,6 @@ qemuMonitorOpenInternal(virDomainObjPtr vm,
     if (!(mon = virObjectLockableNew(qemuMonitorClass)))
         return NULL;
 
-    mon->fd = -1;
     mon->logfd = -1;
     if (virCondInit(&mon->notify) < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
@@ -958,6 +960,8 @@ qemuMonitorClose(qemuMonitorPtr mon)
     PROBE(QEMU_MONITOR_CLOSE,
           "mon=%p refs=%d", mon, mon->parent.parent.u.s.refs);
 
+    qemuMonitorSetDomainLog(mon, -1);
+
     if (mon->fd >= 0) {
         if (mon->watch) {
             virEventRemoveHandle(mon->watch);
@@ -1051,6 +1055,20 @@ qemuMonitorSend(qemuMonitorPtr mon,
     qemuMonitorUpdateWatch(mon);
 
     return ret;
+}
+
+
+/**
+ * This function returns a new virError object; the caller is responsible
+ * for freeing it.
+ */
+virErrorPtr
+qemuMonitorLastError(qemuMonitorPtr mon)
+{
+    if (mon->lastError.code == VIR_ERR_OK)
+        return NULL;
+
+    return virErrorCopyNew(&mon->lastError);
 }
 
 
@@ -1486,6 +1504,32 @@ qemuMonitorEmitSerialChange(qemuMonitorPtr mon,
 
 
 int
+qemuMonitorEmitSpiceMigrated(qemuMonitorPtr mon)
+{
+    int ret = -1;
+    VIR_DEBUG("mon=%p", mon);
+
+    QEMU_MONITOR_CALLBACK(mon, ret, domainSpiceMigrated, mon->vm);
+
+    return ret;
+}
+
+
+int
+qemuMonitorEmitMigrationStatus(qemuMonitorPtr mon,
+                               int status)
+{
+    int ret = -1;
+    VIR_DEBUG("mon=%p, status=%s",
+              mon, NULLSTR(qemuMonitorMigrationStatusTypeToString(status)));
+
+    QEMU_MONITOR_CALLBACK(mon, ret, domainMigrationStatus, mon->vm, status);
+
+    return ret;
+}
+
+
+int
 qemuMonitorSetCapabilities(qemuMonitorPtr mon)
 {
     QEMU_CHECK_MONITOR(mon);
@@ -1593,7 +1637,7 @@ qemuMonitorSetLink(qemuMonitorPtr mon,
 
 int
 qemuMonitorGetVirtType(qemuMonitorPtr mon,
-                       int *virtType)
+                       virDomainVirtType *virtType)
 {
     QEMU_CHECK_MONITOR(mon);
 
@@ -1813,22 +1857,6 @@ qemuMonitorBlockStatsUpdateCapacity(qemuMonitorPtr mon,
     QEMU_CHECK_MONITOR_JSON(mon);
 
     return qemuMonitorJSONBlockStatsUpdateCapacity(mon, stats, backingChain);
-}
-
-
-int
-qemuMonitorGetBlockExtent(qemuMonitorPtr mon,
-                          const char *dev_name,
-                          unsigned long long *extent)
-{
-    VIR_DEBUG("dev_name=%s", dev_name);
-
-    QEMU_CHECK_MONITOR(mon);
-
-    if (mon->json)
-        return qemuMonitorJSONGetBlockExtent(mon, dev_name, extent);
-    else
-        return qemuMonitorTextGetBlockExtent(mon, dev_name, extent);
 }
 
 
@@ -2108,16 +2136,6 @@ qemuMonitorGetMigrationStatus(qemuMonitorPtr mon,
         return qemuMonitorJSONGetMigrationStatus(mon, status);
     else
         return qemuMonitorTextGetMigrationStatus(mon, status);
-}
-
-
-int
-qemuMonitorGetSpiceMigrationStatus(qemuMonitorPtr mon,
-                                   bool *spice_migrated)
-{
-    QEMU_CHECK_MONITOR_JSON(mon);
-
-    return qemuMonitorJSONGetSpiceMigrationStatus(mon, spice_migrated);
 }
 
 
@@ -3214,17 +3232,40 @@ qemuMonitorBlockJobSetSpeed(qemuMonitorPtr mon,
 }
 
 
-int
-qemuMonitorBlockJobInfo(qemuMonitorPtr mon,
-                        const char *device,
-                        virDomainBlockJobInfoPtr info,
-                        unsigned long long *bandwidth)
+virHashTablePtr
+qemuMonitorGetAllBlockJobInfo(qemuMonitorPtr mon)
 {
-    VIR_DEBUG("device=%s, info=%p, bandwidth=%p", device, info, bandwidth);
+    QEMU_CHECK_MONITOR_JSON_NULL(mon);
+    return qemuMonitorJSONGetAllBlockJobInfo(mon);
+}
 
-    QEMU_CHECK_MONITOR_JSON(mon);
 
-    return qemuMonitorJSONBlockJobInfo(mon, device, info, bandwidth);
+/**
+ * qemuMonitorGetBlockJobInfo:
+ * Parse Block Job information, and populate info for the named device.
+ * Return 1 if info available, 0 if device has no block job, and -1 on error.
+ */
+int
+qemuMonitorGetBlockJobInfo(qemuMonitorPtr mon,
+                           const char *alias,
+                           qemuMonitorBlockJobInfoPtr info)
+{
+    virHashTablePtr all;
+    qemuMonitorBlockJobInfoPtr data;
+    int ret = 0;
+
+    VIR_DEBUG("alias=%s, info=%p", alias, info);
+
+    if (!(all = qemuMonitorGetAllBlockJobInfo(mon)))
+        return -1;
+
+    if ((data = virHashLookup(all, alias))) {
+        *info = *data;
+        ret = 1;
+    }
+
+    virHashFree(all);
+    return ret;
 }
 
 
@@ -3771,4 +3812,16 @@ qemuMonitorGetMemoryDeviceInfo(qemuMonitorPtr mon,
     }
 
     return ret;
+}
+
+
+int
+qemuMonitorMigrateIncoming(qemuMonitorPtr mon,
+                           const char *uri)
+{
+    VIR_DEBUG("uri=%s", uri);
+
+    QEMU_CHECK_MONITOR_JSON(mon);
+
+    return qemuMonitorJSONMigrateIncoming(mon, uri);
 }

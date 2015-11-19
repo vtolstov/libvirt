@@ -72,6 +72,7 @@ LDADDS = \
 	../src/libvirt.la
 
 EXTRA_DIST =		\
+	.valgrind.supp \
 	bhyvexml2argvdata \
 	bhyvexml2xmloutdata \
 	capabilityschemadata \
@@ -93,12 +94,12 @@ EXTRA_DIST =		\
 	lxcxml2xmldata \
 	lxcxml2xmloutdata \
 	networkschematest \
+	networkxml2confdata \
+	networkxml2firewalldata \
 	networkxml2xmlin \
 	networkxml2xmlout \
-	networkxml2confdata \
 	networkxml2xmlupdatein \
 	networkxml2xmlupdateout \
-	networkxml2firewalldata \
 	nodedevschemadata \
 	nodedevschematest \
 	nodeinfodata     \
@@ -115,42 +116,40 @@ EXTRA_DIST =		\
 	qemumonitorjsondata \
 	qemuxml2argvdata \
 	qemuxml2xmloutdata \
-	qemuxmlnsdata \
+	schematestutils.sh \
 	secretxml2xmlin \
 	securityselinuxhelperdata \
 	securityselinuxlabeldata \
-	schematestutils.sh \
 	sexpr2xmldata \
 	storagepoolschemadata \
 	storagepoolschematest \
 	storagepoolxml2xmlin \
 	storagepoolxml2xmlout \
-	storagevolxml2argvdata \
 	storagevolschemadata \
 	storagevolschematest \
+	storagevolxml2argvdata \
 	storagevolxml2xmlin \
 	storagevolxml2xmlout \
 	sysinfodata \
 	test-lib.sh	\
-	vircaps2xmldata \
 	vboxsnapshotxmldata \
-	virsh-uriprecedence \
+	vircaps2xmldata \
 	vircgroupdata \
 	virfiledata \
+	virmock.h \
 	virnetdaemondata \
 	virnetdevtestdata \
 	virpcitestdata \
 	virscsidata \
+	virsh-uriprecedence \
 	virusbtestdata \
+	vmwareverdata \
 	vmx2xmldata \
 	xencapsdata \
-	xmconfigdata \
 	xlconfigdata \
+	xmconfigdata \
 	xml2sexprdata \
-	xml2vmxdata \
-	vmwareverdata \
-	.valgrind.supp \
-	virmock.h
+	xml2vmxdata
 
 test_helpers = commandhelper ssh test_conf
 test_programs = virshtest sockettest \
@@ -183,6 +182,7 @@ test_programs = virshtest sockettest \
 	virhostdevtest \
 	vircaps2xmltest \
 	virnetdevtest \
+	virtypedparamtest \
 	$(NULL)
 
 if WITH_REMOTE
@@ -243,7 +243,7 @@ test_programs += xlconfigtest
 endif WITH_LIBXL
 
 if WITH_QEMU
-test_programs += qemuxml2argvtest qemuxml2xmltest qemuxmlnstest \
+test_programs += qemuxml2argvtest qemuxml2xmltest \
 	qemuargv2xmltest qemuhelptest domainsnapshotxml2xmltest \
 	qemumonitortest qemumonitorjsontest qemuhotplugtest \
 	qemuagenttest qemucapabilitiestest qemucaps2xmltest \
@@ -411,6 +411,7 @@ test_libraries = libshunload.la \
 		vircgroupmock.la \
 		virpcimock.la \
 		virnetdevmock.la \
+		nodeinfomock.la \
 		$(NULL)
 if WITH_QEMU
 test_libraries += libqemumonitortestutils.la \
@@ -565,11 +566,6 @@ qemuxml2xmltest_SOURCES = \
 	testutils.c testutils.h
 qemuxml2xmltest_LDADD = $(qemu_LDADDS) $(LDADDS)
 
-qemuxmlnstest_SOURCES = \
-	qemuxmlnstest.c testutilsqemu.c testutilsqemu.h \
-	testutils.c testutils.h
-qemuxmlnstest_LDADD = $(qemu_LDADDS) $(LDADDS)
-
 qemuargv2xmltest_SOURCES = \
 	qemuargv2xmltest.c testutilsqemu.c testutilsqemu.h \
 	testutils.c testutils.h
@@ -640,7 +636,7 @@ domainsnapshotxml2xmltest_SOURCES = \
 domainsnapshotxml2xmltest_LDADD = $(qemu_LDADDS) $(LDADDS)
 else ! WITH_QEMU
 EXTRA_DIST += qemuxml2argvtest.c qemuxml2xmltest.c qemuargv2xmltest.c \
-	qemuxmlnstest.c qemuhelptest.c domainsnapshotxml2xmltest.c \
+	qemuhelptest.c domainsnapshotxml2xmltest.c \
 	qemumonitortest.c testutilsqemu.c testutilsqemu.h \
 	qemumonitorjsontest.c qemuhotplugtest.c \
 	qemuagenttest.c qemucapabilitiestest.c \
@@ -1018,6 +1014,7 @@ libvirportallocatormock_la_SOURCES = \
 	virportallocatortest.c
 libvirportallocatormock_la_CFLAGS = $(AM_CFLAGS) -DMOCK_HELPER=1
 libvirportallocatormock_la_LDFLAGS = $(MOCKLIBS_LDFLAGS)
+libvirportallocatormock_la_LIBADD = ../src/libvirt.la
 
 vircgrouptest_SOURCES = \
 	vircgrouptest.c testutils.h testutils.c
@@ -1046,6 +1043,11 @@ virpcimock_la_CFLAGS = $(AM_CFLAGS)
 virpcimock_la_LIBADD = $(GNULIB_LIBS) \
 					   ../src/libvirt.la
 virpcimock_la_LDFLAGS = $(MOCKLIBS_LDFLAGS)
+
+nodeinfomock_la_SOURCES = \
+	nodeinfomock.c
+nodeinfomock_la_CFLAGS = $(AM_CFLAGS)
+nodeinfomock_la_LDFLAGS = $(MOCKLIBS_LDFLAGS)
 
 virnetdevtest_SOURCES = \
 	virnetdevtest.c testutils.h testutils.c
@@ -1232,6 +1234,11 @@ objecteventtest_SOURCES = \
 	objecteventtest.c \
 	testutils.c testutils.h
 objecteventtest_LDADD = $(LDADDS)
+
+virtypedparamtest_SOURCES = \
+	virtypedparamtest.c testutils.h testutils.c
+virtypedparamtest_LDADD = $(LDADDS)
+
 
 if WITH_LINUX
 fchosttest_SOURCES = \

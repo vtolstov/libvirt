@@ -564,7 +564,7 @@ int qemuMonitorTextGetCPUInfo(qemuMonitorPtr mon,
 
 
 int qemuMonitorTextGetVirtType(qemuMonitorPtr mon,
-                               int *virtType)
+                               virDomainVirtType *virtType)
 {
     char *reply = NULL;
 
@@ -968,16 +968,6 @@ qemuMonitorTextGetAllBlockStatsInfo(qemuMonitorPtr mon,
     return ret;
 }
 
-
-int qemuMonitorTextGetBlockExtent(qemuMonitorPtr mon ATTRIBUTE_UNUSED,
-                                  const char *dev_name ATTRIBUTE_UNUSED,
-                                  unsigned long long *extent ATTRIBUTE_UNUSED)
-{
-    virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
-                   _("unable to query block extent with this QEMU"));
-    return -1;
-}
-
 /* Return 0 on success, -1 on failure, or -2 if not supported.  Size
  * is in bytes. */
 int qemuMonitorTextBlockResize(qemuMonitorPtr mon,
@@ -1179,6 +1169,14 @@ int qemuMonitorTextSetCPU(qemuMonitorPtr mon, int cpu, bool online)
 }
 
 
+/**
+ * Run HMP command to eject a media from ejectable device.
+ *
+ * Returns:
+ *      -2 on error, when the tray is locked
+ *      -1 on all other errors
+ *      0 on success
+ */
 int qemuMonitorTextEjectMedia(qemuMonitorPtr mon,
                               const char *dev_name,
                               bool force)
@@ -1197,6 +1195,8 @@ int qemuMonitorTextEjectMedia(qemuMonitorPtr mon,
      * device not found, device is locked ...
      * No message is printed on success it seems */
     if (c_strcasestr(reply, "device ")) {
+        if (c_strcasestr(reply, "is locked"))
+            ret = -2;
         virReportError(VIR_ERR_OPERATION_FAILED,
                        _("could not eject media on %s: %s"), dev_name, reply);
         goto cleanup;
@@ -2586,7 +2586,7 @@ int qemuMonitorTextDriveDel(qemuMonitorPtr mon,
 
     /* (qemu) drive_del wark
      * Device 'wark' not found */
-    } else if (STRPREFIX(reply, "Device '") && (strstr(reply, "not found"))) {
+    } else if (strstr(reply, "Device '") && strstr(reply, "not found")) {
         /* NB: device not found errors mean the drive was auto-deleted and we
          * ignore the error */
     } else if (STRNEQ(reply, "")) {

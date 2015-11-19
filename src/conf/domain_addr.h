@@ -1,7 +1,7 @@
 /*
  * domain_addr.h: helper APIs for managing domain device addresses
  *
- * Copyright (C) 2006-2014 Red Hat, Inc.
+ * Copyright (C) 2006-2015 Red Hat, Inc.
  * Copyright (C) 2006 Daniel P. Berrange
  *
  * This library is free software; you can redistribute it and/or
@@ -39,10 +39,14 @@ typedef enum {
    /* PCI devices can connect to this bus */
    VIR_PCI_CONNECT_TYPE_PCIE    = 1 << 3,
    /* PCI Express devices can connect to this bus */
-   VIR_PCI_CONNECT_TYPE_EITHER_IF_CONFIG = 1 << 4,
-   /* PCI *and* PCIe devices allowed, if the address
-    * was specified in the config by the user
+   VIR_PCI_CONNECT_TYPE_PCIE_ROOT = 1 << 4,
+   /* for devices that can only connect to pcie-root (i.e. root-port) */
+   VIR_PCI_CONNECT_TYPE_PCIE_PORT = 1 << 5,
+   /* devices that can only connect to a pcie-root-port
+    * or pcie-downstream-switch-port
     */
+   VIR_PCI_CONNECT_TYPE_PCIE_SWITCH = 1 << 6,
+   /* devices that can only connect to a pcie-switch */
 } virDomainPCIConnectFlags;
 
 typedef struct {
@@ -70,10 +74,20 @@ struct _virDomainPCIAddressSet {
 typedef struct _virDomainPCIAddressSet virDomainPCIAddressSet;
 typedef virDomainPCIAddressSet *virDomainPCIAddressSetPtr;
 
-/* a combination of all bit that describe the type of connections
+/* a combination of all bits that describe the type of connections
  * allowed, e.g. PCI, PCIe, switch
  */
 # define VIR_PCI_CONNECT_TYPES_MASK \
+   (VIR_PCI_CONNECT_TYPE_PCI | VIR_PCI_CONNECT_TYPE_PCIE | \
+    VIR_PCI_CONNECT_TYPE_PCIE_ROOT | VIR_PCI_CONNECT_TYPE_PCIE_PORT | \
+    VIR_PCI_CONNECT_TYPE_PCIE_SWITCH)
+
+/* combination of all bits that could be used to connect a normal
+ * endpoint device (i.e. excluding the connection possible between an
+ * upstream and downstream switch port, or a PCIe root port and a PCIe
+ * port)
+ */
+# define VIR_PCI_CONNECT_TYPES_ENDPOINT \
    (VIR_PCI_CONNECT_TYPE_PCI | VIR_PCI_CONNECT_TYPE_PCIE)
 
 char *virDomainPCIAddressAsString(virDevicePCIAddressPtr addr)

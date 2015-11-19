@@ -27,15 +27,12 @@
 
 # include "driver.h"
 # include "conf/domain_conf.h"
-# include "conf/storage_conf.h"
 # include "conf/domain_event.h"
-# include "conf/network_conf.h"
 # include "virthread.h"
-# include "virjson.h"
 
 # define vzParseError()                                                 \
     virReportErrorHelper(VIR_FROM_TEST, VIR_ERR_OPERATION_FAILED, __FILE__,    \
-                     __FUNCTION__, __LINE__, _("Can't parse prlctl output"))
+                         __FUNCTION__, __LINE__, _("Can't parse prlctl output"))
 
 # define IS_CT(def)  (def->os.type == VIR_DOMAIN_OSTYPE_EXE)
 
@@ -50,11 +47,6 @@
 # define PARALLELS_DOMAIN_ROUTED_NETWORK_NAME   "Routed"
 # define PARALLELS_DOMAIN_BRIDGED_NETWORK_NAME  "Bridged"
 
-# define PARALLELS_REQUIRED_HOSTONLY_NETWORK "Host-Only"
-# define PARALLELS_HOSTONLY_NETWORK_TYPE "host-only"
-# define PARALLELS_REQUIRED_BRIDGED_NETWORK  "Bridged"
-# define PARALLELS_BRIDGED_NETWORK_TYPE  "bridged"
-
 struct _vzConn {
     virMutex lock;
 
@@ -62,12 +54,9 @@ struct _vzConn {
     virDomainObjListPtr domains;
 
     PRL_HANDLE server;
-    virStoragePoolObjList pools;
-    virNetworkObjListPtr networks;
     virCapsPtr caps;
     virDomainXMLOptionPtr xmlopt;
     virObjectEventStatePtr domainEventState;
-    virStorageDriverStatePtr storageState;
     const char *drivername;
 };
 
@@ -77,8 +66,8 @@ typedef struct _vzConn *vzConnPtr;
 struct _vzCountersCache {
     PRL_HANDLE stats;
     virCond cond;
-    // -1 - unsubscribed
-    // > -1 - subscribed
+    /* = -1 - unsubscribed
+       > -1 - subscribed */
     int count;
 };
 
@@ -94,35 +83,18 @@ struct vzDomObj {
 
 typedef struct vzDomObj *vzDomObjPtr;
 
-virDrvOpenStatus vzStorageOpen(virConnectPtr conn, unsigned int flags);
-int vzStorageClose(virConnectPtr conn);
-extern virStorageDriver vzStorageDriver;
-
-virDrvOpenStatus vzNetworkOpen(virConnectPtr conn, unsigned int flags);
-int vzNetworkClose(virConnectPtr conn);
-extern virNetworkDriver vzNetworkDriver;
-
 virDomainObjPtr vzDomObjFromDomain(virDomainPtr domain);
 virDomainObjPtr vzDomObjFromDomainRef(virDomainPtr domain);
 
-virJSONValuePtr vzParseOutput(const char *binary, ...)
-    ATTRIBUTE_NONNULL(1) ATTRIBUTE_SENTINEL;
 char * vzGetOutput(const char *binary, ...)
     ATTRIBUTE_NONNULL(1) ATTRIBUTE_SENTINEL;
-int vzCmdRun(const char *binary, ...)
-    ATTRIBUTE_NONNULL(1) ATTRIBUTE_SENTINEL;
-char * vzAddFileExt(const char *path, const char *ext);
 void vzDriverLock(vzConnPtr driver);
 void vzDriverUnlock(vzConnPtr driver);
-virStorageVolPtr vzStorageVolLookupByPathLocked(virConnectPtr conn,
-                                                       const char *path);
-int vzStorageVolDefRemove(virStoragePoolObjPtr privpool,
-                                 virStorageVolDefPtr privvol);
 
-# define PARALLELS_BLOCK_STATS_FOREACH(OP)                                   \
-             OP(rd_req, VIR_DOMAIN_BLOCK_STATS_READ_REQ, "read_requests")    \
-             OP(rd_bytes, VIR_DOMAIN_BLOCK_STATS_READ_BYTES, "read_total")   \
-             OP(wr_req, VIR_DOMAIN_BLOCK_STATS_WRITE_REQ, "write_requests")  \
-             OP(wr_bytes, VIR_DOMAIN_BLOCK_STATS_WRITE_BYTES, "write_total")
+# define PARALLELS_BLOCK_STATS_FOREACH(OP)                              \
+    OP(rd_req, VIR_DOMAIN_BLOCK_STATS_READ_REQ, "read_requests")        \
+    OP(rd_bytes, VIR_DOMAIN_BLOCK_STATS_READ_BYTES, "read_total")       \
+    OP(wr_req, VIR_DOMAIN_BLOCK_STATS_WRITE_REQ, "write_requests")      \
+    OP(wr_bytes, VIR_DOMAIN_BLOCK_STATS_WRITE_BYTES, "write_total")
 
 #endif

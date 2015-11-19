@@ -436,27 +436,37 @@ qemuSetupBlkioCgroup(virDomainObjPtr vm)
             virBlkioDevicePtr dev = &vm->def->blkio.devices[i];
             if (dev->weight &&
                 (virCgroupSetBlkioDeviceWeight(priv->cgroup, dev->path,
-                                               dev->weight) < 0))
+                                               dev->weight) < 0 ||
+                 virCgroupGetBlkioDeviceWeight(priv->cgroup, dev->path,
+                                               &dev->weight) < 0))
                 return -1;
 
             if (dev->riops &&
                 (virCgroupSetBlkioDeviceReadIops(priv->cgroup, dev->path,
-                                                 dev->riops) < 0))
+                                                 dev->riops) < 0 ||
+                 virCgroupGetBlkioDeviceReadIops(priv->cgroup, dev->path,
+                                                 &dev->riops) < 0))
                 return -1;
 
             if (dev->wiops &&
                 (virCgroupSetBlkioDeviceWriteIops(priv->cgroup, dev->path,
-                                                  dev->wiops) < 0))
+                                                  dev->wiops) < 0 ||
+                 virCgroupGetBlkioDeviceWriteIops(priv->cgroup, dev->path,
+                                                  &dev->wiops) < 0))
                 return -1;
 
             if (dev->rbps &&
                 (virCgroupSetBlkioDeviceReadBps(priv->cgroup, dev->path,
-                                                dev->rbps) < 0))
+                                                dev->rbps) < 0 ||
+                 virCgroupGetBlkioDeviceReadBps(priv->cgroup, dev->path,
+                                                &dev->rbps) < 0))
                 return -1;
 
             if (dev->wbps &&
                 (virCgroupSetBlkioDeviceWriteBps(priv->cgroup, dev->path,
-                                                 dev->wbps) < 0))
+                                                 dev->wbps) < 0 ||
+                 virCgroupGetBlkioDeviceWriteBps(priv->cgroup, dev->path,
+                                                 &dev->wbps) < 0))
                 return -1;
         }
     }
@@ -696,8 +706,7 @@ qemuSetupCpuCgroup(virQEMUDriverPtr driver,
             event = virDomainEventTunableNewFromObj(vm, eventParams, eventNparams);
         }
 
-        if (event)
-            qemuDomainEventQueue(driver, event);
+        qemuDomainEventQueue(driver, event);
     }
 
     return 0;
@@ -714,7 +723,7 @@ qemuInitCgroup(virQEMUDriverPtr driver,
     qemuDomainObjPrivatePtr priv = vm->privateData;
     virQEMUDriverConfigPtr cfg = virQEMUDriverGetConfig(driver);
 
-    if (!cfg->privileged)
+    if (!virQEMUDriverIsPrivileged(driver))
         goto done;
 
     if (!virCgroupAvailable())
@@ -745,7 +754,7 @@ qemuInitCgroup(virQEMUDriverPtr driver,
 
     if (virCgroupNewMachine(vm->def->name,
                             "qemu",
-                            cfg->privileged,
+                            true,
                             vm->def->uuid,
                             NULL,
                             vm->pid,
@@ -844,7 +853,7 @@ qemuConnectCgroup(virQEMUDriverPtr driver,
     qemuDomainObjPrivatePtr priv = vm->privateData;
     int ret = -1;
 
-    if (!cfg->privileged)
+    if (!virQEMUDriverIsPrivileged(driver))
         goto done;
 
     if (!virCgroupAvailable())
@@ -855,9 +864,6 @@ qemuConnectCgroup(virQEMUDriverPtr driver,
     if (virCgroupNewDetectMachine(vm->def->name,
                                   "qemu",
                                   vm->pid,
-                                  vm->def->resource ?
-                                  vm->def->resource->partition :
-                                  NULL,
                                   cfg->cgroupControllers,
                                   &priv->cgroup) < 0)
         goto cleanup;
@@ -1028,10 +1034,6 @@ qemuSetupCgroupForVcpu(virDomainObjPtr vm)
         if (virCgroupAddTask(cgroup_vcpu, priv->vcpupids[i]) < 0)
             goto cleanup;
 
-        if (mem_mask &&
-            virCgroupSetCpusetMems(cgroup_vcpu, mem_mask) < 0)
-            goto cleanup;
-
         if (period || quota) {
             if (qemuSetupCgroupVcpuBW(cgroup_vcpu, period, quota) < 0)
                 goto cleanup;
@@ -1040,6 +1042,10 @@ qemuSetupCgroupForVcpu(virDomainObjPtr vm)
         /* Set vcpupin in cgroup if vcpupin xml is provided */
         if (virCgroupHasController(priv->cgroup, VIR_CGROUP_CONTROLLER_CPUSET)) {
             virBitmapPtr cpumap = NULL;
+
+            if (mem_mask &&
+                virCgroupSetCpusetMems(cgroup_vcpu, mem_mask) < 0)
+                goto cleanup;
 
             /* try to use the default cpu maps */
             if (vm->def->placement_mode == VIR_DOMAIN_CPU_PLACEMENT_MODE_AUTO)
@@ -1157,6 +1163,9 @@ qemuSetupCgroupForIOThreads(virDomainObjPtr vm)
     char *mem_mask = NULL;
     virDomainNumatuneMemMode mem_mode;
 
+    if (def->niothreadids == 0)
+        return 0;
+
     if ((period || quota) &&
         !virCgroupHasController(priv->cgroup, VIR_CGROUP_CONTROLLER_CPU)) {
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
@@ -1205,14 +1214,14 @@ qemuSetupCgroupForIOThreads(virDomainObjPtr vm)
                 goto cleanup;
         }
 
-        if (mem_mask &&
-            virCgroupSetCpusetMems(cgroup_iothread, mem_mask) < 0)
-            goto cleanup;
-
         /* Set iothreadpin in cgroup if iothreadpin xml is provided */
         if (virCgroupHasController(priv->cgroup,
                                    VIR_CGROUP_CONTROLLER_CPUSET)) {
             virBitmapPtr cpumask = NULL;
+
+            if (mem_mask &&
+                virCgroupSetCpusetMems(cgroup_iothread, mem_mask) < 0)
+                goto cleanup;
 
             if (def->iothreadids[i]->cpumask)
                 cpumask = def->iothreadids[i]->cpumask;
@@ -1247,21 +1256,16 @@ qemuRemoveCgroup(virQEMUDriverPtr driver,
                  virDomainObjPtr vm)
 {
     qemuDomainObjPrivatePtr priv = vm->privateData;
-    virQEMUDriverConfigPtr cfg;
 
     if (priv->cgroup == NULL)
         return 0; /* Not supported, so claim success */
 
-    cfg = virQEMUDriverGetConfig(driver);
-
     if (virCgroupTerminateMachine(vm->def->name,
                                   "qemu",
-                                  cfg->privileged) < 0) {
+                                  virQEMUDriverIsPrivileged(driver)) < 0) {
         if (!virCgroupNewIgnoreError())
             VIR_DEBUG("Failed to terminate cgroup for %s", vm->def->name);
     }
-
-    virObjectUnref(cfg);
 
     return virCgroupRemove(priv->cgroup);
 }

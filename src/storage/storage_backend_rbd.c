@@ -66,6 +66,7 @@ static int virStorageBackendRBDOpenRADOSConn(virStorageBackendRBDStatePtr ptr,
     const char *client_mount_timeout = "30";
     const char *mon_op_timeout = "30";
     const char *osd_op_timeout = "30";
+    const char *rbd_default_format = "2";
 
     if (authdef) {
         VIR_DEBUG("Using cephx authorization, username: %s", authdef->username);
@@ -210,6 +211,14 @@ static int virStorageBackendRBDOpenRADOSConn(virStorageBackendRBDStatePtr ptr,
 
     VIR_DEBUG("Setting RADOS option rados_osd_op_timeout to %s", osd_op_timeout);
     rados_conf_set(ptr->cluster, "rados_osd_op_timeout", osd_op_timeout);
+
+    /*
+     * Librbd supports creating RBD format 2 images. We no longer have to invoke
+     * rbd_create3(), we can tell librbd to default to format 2.
+     * This leaves us to simply use rbd_create() and use the default behavior of librbd
+     */
+    VIR_DEBUG("Setting RADOS option rbd_default_format to %s", rbd_default_format);
+    rados_conf_set(ptr->cluster, "rbd_default_format", rbd_default_format);
 
     ptr->starttime = time(0);
     r = rados_connect(ptr->cluster);
@@ -412,6 +421,87 @@ static int virStorageBackendRBDRefreshPool(virConnectPtr conn,
     return ret;
 }
 
+static int virStorageBackendRBDCleanupSnapshots(rados_ioctx_t ioctx,
+                                                virStoragePoolSourcePtr source,
+                                                virStorageVolDefPtr vol)
+{
+    int ret = -1;
+    int r = 0;
+    int max_snaps = 128;
+    int snap_count, protected;
+    size_t i;
+    rbd_snap_info_t *snaps = NULL;
+    rbd_image_t image = NULL;
+
+    r = rbd_open(ioctx, vol->name, &image, NULL);
+    if (r < 0) {
+       virReportSystemError(-r, _("failed to open the RBD image '%s'"),
+                            vol->name);
+       goto cleanup;
+    }
+
+    do {
+        if (VIR_ALLOC_N(snaps, max_snaps))
+            goto cleanup;
+
+        snap_count = rbd_snap_list(image, snaps, &max_snaps);
+        if (snap_count <= 0)
+            VIR_FREE(snaps);
+
+    } while (snap_count == -ERANGE);
+
+    VIR_DEBUG("Found %d snapshots for volume %s/%s", snap_count,
+              source->name, vol->name);
+
+    if (snap_count > 0) {
+        for (i = 0; i < snap_count; i++) {
+            if (rbd_snap_is_protected(image, snaps[i].name, &protected)) {
+                virReportSystemError(-r, _("failed to verify if snapshot '%s/%s@%s' is protected"),
+                                     source->name, vol->name,
+                                     snaps[i].name);
+                goto cleanup;
+            }
+
+            if (protected == 1) {
+                VIR_DEBUG("Snapshot %s/%s@%s is protected needs to be "
+                          "unprotected", source->name, vol->name,
+                          snaps[i].name);
+
+                if (rbd_snap_unprotect(image, snaps[i].name) < 0) {
+                    virReportSystemError(-r, _("failed to unprotect snapshot '%s/%s@%s'"),
+                                         source->name, vol->name,
+                                         snaps[i].name);
+                    goto cleanup;
+                }
+            }
+
+            VIR_DEBUG("Removing snapshot %s/%s@%s", source->name,
+                      vol->name, snaps[i].name);
+
+            r = rbd_snap_remove(image, snaps[i].name);
+            if (r < 0) {
+                virReportSystemError(-r, _("failed to remove snapshot '%s/%s@%s'"),
+                                     source->name, vol->name,
+                                     snaps[i].name);
+                goto cleanup;
+            }
+        }
+    }
+
+    ret = 0;
+
+ cleanup:
+    if (snaps)
+        rbd_snap_list_end(snaps);
+
+    VIR_FREE(snaps);
+
+    if (image)
+        rbd_close(image);
+
+    return ret;
+}
+
 static int virStorageBackendRBDDeleteVol(virConnectPtr conn,
                                          virStoragePoolObjPtr pool,
                                          virStorageVolDefPtr vol,
@@ -433,6 +523,14 @@ static int virStorageBackendRBDDeleteVol(virConnectPtr conn,
 
     if (virStorageBackendRBDOpenIoCTX(&ptr, pool) < 0)
         goto cleanup;
+
+    if (flags & VIR_STORAGE_VOL_DELETE_WITH_SNAPSHOTS) {
+        if (virStorageBackendRBDCleanupSnapshots(ptr.ioctx, &pool->def->source,
+                                                 vol) < 0)
+            goto cleanup;
+    }
+
+    VIR_DEBUG("Removing volume %s/%s", pool->def->source.name, vol->name);
 
     r = rbd_remove(ptr.ioctx, vol->name);
     if (r < 0 && (-r) != ENOENT) {
@@ -475,20 +573,7 @@ static int virStorageBackendRBDCreateImage(rados_ioctx_t io,
                                            char *name, long capacity)
 {
     int order = 0;
-#if LIBRBD_VERSION_CODE > 260
-    uint64_t features = 3;
-    uint64_t stripe_count = 1;
-    uint64_t stripe_unit = 4194304;
-
-    if (rbd_create3(io, name, capacity, features, &order,
-                    stripe_unit, stripe_count) < 0) {
-#else
-    if (rbd_create(io, name, capacity, &order) < 0) {
-#endif
-        return -1;
-    }
-
-    return 0;
+    return rbd_create(io, name, capacity, &order);
 }
 
 static int
@@ -535,9 +620,6 @@ virStorageBackendRBDBuildVol(virConnectPtr conn,
                              vol->name);
         goto cleanup;
     }
-
-    if (volStorageBackendRBDRefreshVolInfo(vol, pool, &ptr) < 0)
-        goto cleanup;
 
     ret = 0;
 

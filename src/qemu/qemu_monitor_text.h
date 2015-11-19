@@ -52,7 +52,7 @@ int qemuMonitorTextSystemReset(qemuMonitorPtr mon);
 int qemuMonitorTextGetCPUInfo(qemuMonitorPtr mon,
                               int **pids);
 int qemuMonitorTextGetVirtType(qemuMonitorPtr mon,
-                               int *virtType);
+                               virDomainVirtType *virtType);
 int qemuMonitorTextGetBalloonInfo(qemuMonitorPtr mon,
                                   unsigned long long *currmem);
 int qemuMonitorTextGetMemoryStats(qemuMonitorPtr mon,
@@ -63,9 +63,6 @@ int qemuMonitorTextGetBlockInfo(qemuMonitorPtr mon,
 
 int qemuMonitorTextGetAllBlockStatsInfo(qemuMonitorPtr mon,
                                         virHashTablePtr hash);
-int qemuMonitorTextGetBlockExtent(qemuMonitorPtr mon,
-                                  const char *dev_name,
-                                  unsigned long long *extent);
 int qemuMonitorTextBlockResize(qemuMonitorPtr mon,
                                const char *device,
                                unsigned long long size);

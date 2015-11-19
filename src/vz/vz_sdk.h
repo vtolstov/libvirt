@@ -66,3 +66,13 @@ int
 prlsdkDetachVolume(virDomainObjPtr dom, virDomainDiskDefPtr disk);
 int
 prlsdkGetBlockStats(virDomainObjPtr dom, virDomainDiskDefPtr disk, virDomainBlockStatsPtr stats);
+int
+prlsdkAttachNet(virDomainObjPtr dom, vzConnPtr privconn, virDomainNetDefPtr net);
+int
+prlsdkDetachNet(virDomainObjPtr dom, vzConnPtr privconn, virDomainNetDefPtr net);
+int
+prlsdkGetNetStats(virDomainObjPtr dom, const char *path, virDomainInterfaceStatsPtr stats);
+int
+prlsdkGetVcpuStats(virDomainObjPtr dom, int idx, unsigned long long *time);
+int
+prlsdkGetMemoryStats(virDomainObjPtr dom, virDomainMemoryStatPtr stats, unsigned int nr_stats);

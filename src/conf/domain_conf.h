@@ -209,6 +209,7 @@ struct _virDomainDeviceDef {
 /* Different types of hypervisor */
 /* NB: Keep in sync with virDomainVirtTypeToString impl */
 typedef enum {
+    VIR_DOMAIN_VIRT_NONE = 0,
     VIR_DOMAIN_VIRT_QEMU,
     VIR_DOMAIN_VIRT_KQEMU,
     VIR_DOMAIN_VIRT_KVM,
@@ -463,7 +464,7 @@ struct _virDomainHostdevSubsysSCSIHost {
     char *adapter;
     unsigned bus;
     unsigned target;
-    unsigned unit;
+    unsigned long long unit;
 };
 
 typedef struct _virDomainHostdevSubsysSCSIiSCSI virDomainHostdevSubsysSCSIiSCSI;
@@ -752,9 +753,23 @@ typedef enum {
     VIR_DOMAIN_CONTROLLER_MODEL_PCIE_ROOT,
     VIR_DOMAIN_CONTROLLER_MODEL_PCI_BRIDGE,
     VIR_DOMAIN_CONTROLLER_MODEL_DMI_TO_PCI_BRIDGE,
+    VIR_DOMAIN_CONTROLLER_MODEL_PCIE_ROOT_PORT,
+    VIR_DOMAIN_CONTROLLER_MODEL_PCIE_SWITCH_UPSTREAM_PORT,
+    VIR_DOMAIN_CONTROLLER_MODEL_PCIE_SWITCH_DOWNSTREAM_PORT,
 
     VIR_DOMAIN_CONTROLLER_MODEL_PCI_LAST
 } virDomainControllerModelPCI;
+
+typedef enum {
+    VIR_DOMAIN_CONTROLLER_PCI_MODEL_NAME_NONE,
+    VIR_DOMAIN_CONTROLLER_PCI_MODEL_NAME_PCI_BRIDGE,
+    VIR_DOMAIN_CONTROLLER_PCI_MODEL_NAME_I82801B11_BRIDGE,
+    VIR_DOMAIN_CONTROLLER_PCI_MODEL_NAME_IOH3420,
+    VIR_DOMAIN_CONTROLLER_PCI_MODEL_NAME_X3130_UPSTREAM,
+    VIR_DOMAIN_CONTROLLER_PCI_MODEL_NAME_XIO3130_DOWNSTREAM,
+
+    VIR_DOMAIN_CONTROLLER_PCI_MODEL_NAME_LAST
+} virDomainControllerPCIModelName;
 
 typedef enum {
     VIR_DOMAIN_CONTROLLER_MODEL_SCSI_AUTO,
@@ -797,6 +812,25 @@ typedef virDomainPCIControllerOpts *virDomainPCIControllerOptsPtr;
 struct _virDomainPCIControllerOpts {
     bool pcihole64;
     unsigned long pcihole64size;
+
+    /* the exact controller name is in the "model" subelement, e.g.:
+     * <controller type='pci' model='pcie-root-port'>
+     *   <model name='ioh3420''/>
+     *   ...
+     */
+    int modelName; /* the exact name of the device in hypervisor */
+
+    /* the following items are attributes of the "target" subelement
+     * of controller type='pci'. They are bits of configuration that
+     * are specified on the qemu commandline and are visible to the
+     * guest OS, so they must be preserved to ensure ABI
+     * compatibility.
+     */
+    int chassisNr; /* used by pci-bridge, -1 == unspecified */
+    /* chassis & port used by
+     * pcie-root-port/pcie-switch-downstream-port, -1 = unspecified */
+    int chassis;
+    int port;
 };
 
 /* Stores the virtual disk controller configuration */
@@ -807,6 +841,7 @@ struct _virDomainControllerDef {
     unsigned int queues;
     unsigned int cmd_per_lun;
     unsigned int max_sectors;
+    int ioeventfd; /* enum virTristateSwitch */
     union {
         virDomainVirtioSerialOpts vioserial;
         virDomainPCIControllerOpts pciopts;
@@ -889,6 +924,7 @@ typedef enum {
     VIR_DOMAIN_NET_TYPE_INTERNAL,
     VIR_DOMAIN_NET_TYPE_DIRECT,
     VIR_DOMAIN_NET_TYPE_HOSTDEV,
+    VIR_DOMAIN_NET_TYPE_UDP,
 
     VIR_DOMAIN_NET_TYPE_LAST
 } virDomainNetType;
@@ -991,6 +1027,8 @@ struct _virDomainNetDef {
         struct {
             char *address;
             int port;
+            char *localaddr;
+            int localport;
         } socket; /* any of NET_CLIENT or NET_SERVER or NET_MCAST */
         struct {
             char *name;
@@ -1304,6 +1342,7 @@ struct _virDomainSoundDef {
 typedef enum {
     VIR_DOMAIN_WATCHDOG_MODEL_I6300ESB,
     VIR_DOMAIN_WATCHDOG_MODEL_IB700,
+    VIR_DOMAIN_WATCHDOG_MODEL_DIAG288,
 
     VIR_DOMAIN_WATCHDOG_MODEL_LAST
 } virDomainWatchdogModel;
@@ -1315,6 +1354,7 @@ typedef enum {
     VIR_DOMAIN_WATCHDOG_ACTION_PAUSE,
     VIR_DOMAIN_WATCHDOG_ACTION_DUMP,
     VIR_DOMAIN_WATCHDOG_ACTION_NONE,
+    VIR_DOMAIN_WATCHDOG_ACTION_INJECTNMI,
 
     VIR_DOMAIN_WATCHDOG_ACTION_LAST
 } virDomainWatchdogAction;
@@ -1599,7 +1639,7 @@ struct _virDomainShmemDef {
     unsigned long long size;
     struct {
         bool enabled;
-        char *path;
+        virDomainChrSourceDef chr;
     } server;
     struct {
         bool enabled;
@@ -1982,7 +2022,7 @@ struct _virDomainMemoryDef {
 
     /* target */
     int model; /* virDomainMemoryModel */
-    unsigned int targetNode;
+    int targetNode;
     unsigned long long size; /* kibibytes */
 
     virDomainDeviceInfo info;
@@ -2103,8 +2143,11 @@ typedef struct _virDomainMemtune virDomainMemtune;
 typedef virDomainMemtune *virDomainMemtunePtr;
 
 struct _virDomainMemtune {
-    unsigned long long max_balloon; /* in kibibytes, capped at ulong thanks
-                                       to virDomainGetMaxMemory */
+    /* total memory size including memory modules in kibibytes, this field
+     * should be accessed only via accessors */
+    unsigned long long total_memory;
+    /* initial memory size in kibibytes = total_memory excluding memory modules*/
+    unsigned long long initial_memory;
     unsigned long long cur_balloon; /* in kibibytes, capped at ulong thanks
                                        to virDomainGetInfo */
 
@@ -2149,7 +2192,7 @@ struct _virDomainKeyWrapDef {
 typedef struct _virDomainDef virDomainDef;
 typedef virDomainDef *virDomainDefPtr;
 struct _virDomainDef {
-    int virtType;
+    virDomainVirtType virtType;
     int id;
     unsigned char uuid[VIR_UUID_BUFLEN];
     char *name;
@@ -2282,9 +2325,11 @@ struct _virDomainDef {
     xmlNodePtr metadata;
 };
 
-unsigned long long virDomainDefGetMemoryInitial(virDomainDefPtr def);
+unsigned long long virDomainDefGetMemoryInitial(const virDomainDef *def);
+void virDomainDefSetMemoryTotal(virDomainDefPtr def, unsigned long long size);
 void virDomainDefSetMemoryInitial(virDomainDefPtr def, unsigned long long size);
 unsigned long long virDomainDefGetMemoryActual(virDomainDefPtr def);
+bool virDomainDefHasMemoryHotplug(const virDomainDef *def);
 
 typedef enum {
     VIR_DOMAIN_KEY_WRAP_CIPHER_NAME_AES,
@@ -2303,6 +2348,7 @@ typedef enum {
     VIR_DOMAIN_TAINT_HOST_CPU,         /* Host CPU passthrough in use */
     VIR_DOMAIN_TAINT_HOOK,             /* Domain (possibly) changed via hook script */
     VIR_DOMAIN_TAINT_CDROM_PASSTHROUGH,/* CDROM passthrough */
+    VIR_DOMAIN_TAINT_CUSTOM_DTB,       /* Custom device tree blob was specifed */
 
     VIR_DOMAIN_TAINT_LAST
 } virDomainTaintFlags;
@@ -2318,6 +2364,7 @@ typedef struct _virDomainObj virDomainObj;
 typedef virDomainObj *virDomainObjPtr;
 struct _virDomainObj {
     virObjectLockable parent;
+    virCond cond;
 
     pid_t pid;
     virDomainStateReason state;
@@ -2353,12 +2400,6 @@ typedef bool (*virDomainObjListACLFilter)(virConnectPtr conn,
 typedef struct _virDomainXMLOption virDomainXMLOption;
 typedef virDomainXMLOption *virDomainXMLOptionPtr;
 
-typedef void *(*virDomainXMLPrivateDataAllocFunc)(void);
-typedef void (*virDomainXMLPrivateDataFreeFunc)(void *);
-typedef virObjectPtr (*virDomainXMLPrivateDataNewFunc)(void);
-typedef int (*virDomainXMLPrivateDataFormatFunc)(virBufferPtr, void *);
-typedef int (*virDomainXMLPrivateDataParseFunc)(xmlXPathContextPtr, void *);
-
 /* Called once after everything else has been parsed, for adjusting
  * overall domain defaults.  */
 typedef int (*virDomainDefPostParseCallback)(virDomainDefPtr def,
@@ -2387,6 +2428,15 @@ struct _virDomainDefParserConfig {
     unsigned char macPrefix[VIR_MAC_PREFIX_BUFLEN];
 };
 
+typedef void *(*virDomainXMLPrivateDataAllocFunc)(void);
+typedef void (*virDomainXMLPrivateDataFreeFunc)(void *);
+typedef virObjectPtr (*virDomainXMLPrivateDataNewFunc)(void);
+typedef int (*virDomainXMLPrivateDataFormatFunc)(virBufferPtr,
+                                                 virDomainObjPtr);
+typedef int (*virDomainXMLPrivateDataParseFunc)(xmlXPathContextPtr,
+                                                virDomainObjPtr,
+                                                virDomainDefParserConfigPtr);
+
 typedef struct _virDomainXMLPrivateDataCallbacks virDomainXMLPrivateDataCallbacks;
 typedef virDomainXMLPrivateDataCallbacks *virDomainXMLPrivateDataCallbacksPtr;
 struct _virDomainXMLPrivateDataCallbacks {
@@ -2410,6 +2460,7 @@ virDomainXMLOptionGetNamespace(virDomainXMLOptionPtr xmlopt)
 int
 virDomainDefPostParse(virDomainDefPtr def,
                       virCapsPtr caps,
+                      unsigned int parseFlags,
                       virDomainXMLOptionPtr xmlopt);
 
 static inline bool
@@ -2437,6 +2488,10 @@ void virDomainObjEndAPI(virDomainObjPtr *vm);
 bool virDomainObjTaint(virDomainObjPtr obj,
                        virDomainTaintFlags taint);
 
+void virDomainObjBroadcast(virDomainObjPtr vm);
+int virDomainObjWait(virDomainObjPtr vm);
+int virDomainObjWaitUntil(virDomainObjPtr vm,
+                          unsigned long long whenms);
 
 int virDomainDefCheckUnsupportedMemoryHotplug(virDomainDefPtr def);
 int virDomainDeviceDefCheckUnsupportedMemoryDevice(virDomainDeviceDefPtr dev);
@@ -2450,7 +2505,7 @@ void virDomainDiskDefFree(virDomainDiskDefPtr def);
 void virDomainLeaseDefFree(virDomainLeaseDefPtr def);
 int virDomainDiskGetType(virDomainDiskDefPtr def);
 void virDomainDiskSetType(virDomainDiskDefPtr def, int type);
-const char *virDomainDiskGetSource(virDomainDiskDefPtr def);
+const char *virDomainDiskGetSource(virDomainDiskDef const *def);
 int virDomainDiskSetSource(virDomainDiskDefPtr def, const char *src)
     ATTRIBUTE_RETURN_CHECK;
 const char *virDomainDiskGetDriver(virDomainDiskDefPtr def);
@@ -2533,6 +2588,11 @@ virDomainObjPtr virDomainObjListAdd(virDomainObjListPtr doms,
                                     virDomainXMLOptionPtr xmlopt,
                                     unsigned int flags,
                                     virDomainDefPtr *oldDef);
+int virDomainObjListRenameAddNew(virDomainObjListPtr doms,
+                                 virDomainObjPtr vm,
+                                 const char *name);
+int virDomainObjListRenameRemove(virDomainObjListPtr doms,
+                                 const char *name);
 void virDomainObjAssignDef(virDomainObjPtr domain,
                            virDomainDefPtr def,
                            bool live,
@@ -2553,6 +2613,7 @@ int virDomainObjGetDefs(virDomainObjPtr vm,
                         unsigned int flags,
                         virDomainDefPtr *liveDef,
                         virDomainDefPtr *persDef);
+virDomainDefPtr virDomainObjGetOneDef(virDomainObjPtr vm, unsigned int flags);
 
 int
 virDomainLiveConfigHelperMethod(virCapsPtr caps,
@@ -2577,21 +2638,28 @@ void virDomainObjListRemoveLocked(virDomainObjListPtr doms,
 typedef enum {
     /* parse internal domain status information */
     VIR_DOMAIN_DEF_PARSE_STATUS          = 1 << 0,
+    /* Parse only parts of the XML that would be present in an inactive libvirt
+     * XML. Note that the flag does not imply that ABI incompatible
+     * transformations can be used, since it's used to strip runtime info when
+     * restoring save images/migration. */
     VIR_DOMAIN_DEF_PARSE_INACTIVE        = 1 << 1,
     /* parse <actual> element */
     VIR_DOMAIN_DEF_PARSE_ACTUAL_NET      = 1 << 2,
     /* parse original states of host PCI device */
     VIR_DOMAIN_DEF_PARSE_PCI_ORIG_STATES = 1 << 3,
+    /* internal flag passed to device info sub-parser to allow using <rom> */
     VIR_DOMAIN_DEF_PARSE_ALLOW_ROM       = 1 << 4,
+    /* internal flag passed to device info sub-parser to allow specifying boot order */
     VIR_DOMAIN_DEF_PARSE_ALLOW_BOOT      = 1 << 5,
-    VIR_DOMAIN_DEF_PARSE_CLOCK_ADJUST    = 1 << 6,
     /* parse only source half of <disk> */
-    VIR_DOMAIN_DEF_PARSE_DISK_SOURCE     = 1 << 7,
-    VIR_DOMAIN_DEF_PARSE_VALIDATE        = 1 << 8,
+    VIR_DOMAIN_DEF_PARSE_DISK_SOURCE     = 1 << 6,
+    /* perform RNG schema validation on the passed XML document */
+    VIR_DOMAIN_DEF_PARSE_VALIDATE        = 1 << 7,
     /* don't validate os.type and arch against capabilities. Prevents
-     * VMs from disappearing when qemu is removed and libvirtd is restarted
-     */
-    VIR_DOMAIN_DEF_PARSE_SKIP_OSTYPE_CHECKS = 1 << 9,
+     * VMs from disappearing when qemu is removed and libvirtd is restarted */
+    VIR_DOMAIN_DEF_PARSE_SKIP_OSTYPE_CHECKS = 1 << 8,
+    /* allow updates in post parse callback that would break ABI otherwise */
+    VIR_DOMAIN_DEF_PARSE_ABI_UPDATE = 1 << 9,
 } virDomainDefParseFlags;
 
 typedef enum {
@@ -2708,7 +2776,8 @@ int virDomainDiskInsert(virDomainDefPtr def,
 void virDomainDiskInsertPreAlloced(virDomainDefPtr def,
                                    virDomainDiskDefPtr disk);
 int virDomainDiskDefAssignAddress(virDomainXMLOptionPtr xmlopt,
-                                  virDomainDiskDefPtr def);
+                                  virDomainDiskDefPtr def,
+                                  const virDomainDef *vmdef);
 
 virDomainDiskDefPtr
 virDomainDiskRemove(virDomainDefPtr def, size_t i);
@@ -2965,6 +3034,7 @@ VIR_ENUM_DECL(virDomainDiskDiscard)
 VIR_ENUM_DECL(virDomainDiskMirrorState)
 VIR_ENUM_DECL(virDomainController)
 VIR_ENUM_DECL(virDomainControllerModelPCI)
+VIR_ENUM_DECL(virDomainControllerPCIModelName)
 VIR_ENUM_DECL(virDomainControllerModelSCSI)
 VIR_ENUM_DECL(virDomainControllerModelUSB)
 VIR_ENUM_DECL(virDomainFS)
@@ -3115,7 +3185,7 @@ int virDomainDefFindDevice(virDomainDefPtr def,
                            virDomainDeviceDefPtr dev,
                            bool reportError);
 
-bool virDomainDiskSourceIsBlockType(virStorageSourcePtr src)
+bool virDomainDiskSourceIsBlockType(virStorageSourcePtr src, bool report)
     ATTRIBUTE_NONNULL(1);
 
 void virDomainChrSourceDefClear(virDomainChrSourceDefPtr def);
@@ -3149,7 +3219,7 @@ virDomainParseMemory(const char *xpath,
 bool virDomainDefNeedsPlacementAdvice(virDomainDefPtr def)
     ATTRIBUTE_NONNULL(1);
 
-int virDomainDefCheckDuplicateDiskWWN(virDomainDefPtr def)
+int virDomainDefCheckDuplicateDiskInfo(virDomainDefPtr def)
     ATTRIBUTE_NONNULL(1);
 
 #endif /* __DOMAIN_CONF_H */

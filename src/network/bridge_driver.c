@@ -2026,6 +2026,32 @@ networkAddRouteToBridge(virNetworkObjPtr network,
 }
 
 static int
+networkWaitDadFinish(virNetworkObjPtr network)
+{
+    virNetworkIpDefPtr ipdef;
+    virSocketAddrPtr *addrs = NULL, addr = NULL;
+    size_t naddrs = 0;
+    int ret = -1;
+
+    VIR_DEBUG("Begin waiting for IPv6 DAD on network %s", network->def->name);
+
+    while ((ipdef = virNetworkDefGetIpByIndex(network->def,
+                                              AF_INET6, naddrs))) {
+        addr = &ipdef->address;
+        if (VIR_APPEND_ELEMENT_COPY(addrs, naddrs, addr) < 0)
+            goto cleanup;
+    }
+
+    ret = (naddrs == 0) ? 0 : virNetDevWaitDadFinish(addrs, naddrs);
+
+ cleanup:
+    VIR_FREE(addrs);
+    VIR_DEBUG("Finished waiting for IPv6 DAD on network %s with status %d",
+              network->def->name, ret);
+    return ret;
+}
+
+static int
 networkStartNetworkVirtual(virNetworkDriverStatePtr driver,
                            virNetworkObjPtr network)
 {
@@ -2159,8 +2185,14 @@ networkStartNetworkVirtual(virNetworkDriverStatePtr driver,
     if (v6present && networkStartRadvd(driver, network) < 0)
         goto err4;
 
-    /* DAD has happened (dnsmasq waits for it), dnsmasq is now bound to the
-     * bridge's IPv6 address, so we can now set the dummy tun down.
+    /* dnsmasq does not wait for DAD to complete before daemonizing,
+     * so we need to wait for it ourselves.
+     */
+    if (v6present && networkWaitDadFinish(network) < 0)
+        goto err4;
+
+    /* DAD has finished, dnsmasq is now bound to the
+     * bridge's IPv6 address, so we can set the dummy tun down.
      */
     if (tapfd >= 0) {
         if (virNetDevSetOnline(macTapIfName, false) < 0)
@@ -3599,7 +3631,7 @@ networkGetDHCPLeases(virNetworkPtr network,
     size_t i, j;
     size_t nleases = 0;
     int rv = -1;
-    int size = 0;
+    ssize_t size = 0;
     int custom_lease_file_len = 0;
     bool need_results = !!leases;
     long long currtime = 0;
@@ -4686,8 +4718,17 @@ networkGetNetworkAddress(const char *netname, char **netaddr)
  * networkCheckBandwidth:
  * @net: network QoS
  * @ifaceBand: interface QoS (may be NULL if no QoS)
+ * @oldBandwidth: new interface QoS (may be NULL if no QoS)
  * @ifaceMac: interface MAC (used in error messages for identification)
  * @new_rate: new rate for non guaranteed class
+ *
+ * Function checks if @ifaceBand can be satisfied on @net. However, sometimes it
+ * may happen that the interface that @ifaceBand corresponds to is already
+ * plugged into the @net and the bandwidth is to be updated. In that case we
+ * need to check if new bandwidth can be satisfied. If that's the case
+ * @ifaceBand should point to new bandwidth settings and @oldBandwidth to
+ * current ones. If you want to suppress this functionality just pass
+ * @oldBandwidth == NULL.
  *
  * Returns: -1 if plugging would overcommit network QoS
  *           0 if plugging is safe (@new_rate updated)
@@ -4696,6 +4737,7 @@ networkGetNetworkAddress(const char *netname, char **netaddr)
 static int
 networkCheckBandwidth(virNetworkObjPtr net,
                       virNetDevBandwidthPtr ifaceBand,
+                      virNetDevBandwidthPtr oldBandwidth,
                       virMacAddr ifaceMac,
                       unsigned long long *new_rate)
 {
@@ -4716,14 +4758,18 @@ networkCheckBandwidth(virNetworkObjPtr net,
         return -1;
     }
 
-    if (!ifaceBand || !ifaceBand->in || !ifaceBand->in->floor ||
+    if (((!ifaceBand || !ifaceBand->in || !ifaceBand->in->floor) &&
+         (!oldBandwidth || !oldBandwidth->in || !oldBandwidth->in->floor)) ||
         !netBand || !netBand->in) {
         /* no QoS required, claim success */
         return 1;
     }
 
     tmp_new_rate = netBand->in->average;
-    tmp_floor_sum += ifaceBand->in->floor;
+    if (oldBandwidth && oldBandwidth->in)
+        tmp_floor_sum -= oldBandwidth->in->floor;
+    if (ifaceBand && ifaceBand->in)
+        tmp_floor_sum += ifaceBand->in->floor;
 
     /* check against peak */
     if (netBand->in->peak) {
@@ -4749,7 +4795,8 @@ networkCheckBandwidth(virNetworkObjPtr net,
         goto cleanup;
     }
 
-    *new_rate = tmp_new_rate;
+    if (new_rate)
+        *new_rate = tmp_new_rate;
     ret = 0;
 
  cleanup:
@@ -4779,38 +4826,17 @@ networkNextClassID(virNetworkObjPtr net)
     return ret;
 }
 
+
 static int
-networkPlugBandwidth(virNetworkObjPtr net,
-                     virDomainNetDefPtr iface)
+networkPlugBandwidthImpl(virNetworkObjPtr net,
+                         virDomainNetDefPtr iface,
+                         virNetDevBandwidthPtr ifaceBand,
+                         unsigned long long new_rate)
 {
     virNetworkDriverStatePtr driver = networkGetDriver();
-    int ret = -1;
-    int plug_ret;
-    unsigned long long new_rate = 0;
     ssize_t class_id = 0;
-    char ifmac[VIR_MAC_STRING_BUFLEN];
-    virNetDevBandwidthPtr ifaceBand = virDomainNetGetActualBandwidth(iface);
-
-    if ((plug_ret = networkCheckBandwidth(net, ifaceBand,
-                                          iface->mac, &new_rate)) < 0) {
-        /* helper reported error */
-        goto cleanup;
-    }
-
-    if (plug_ret > 0) {
-        /* no QoS needs to be set; claim success */
-        ret = 0;
-        goto cleanup;
-    }
-
-    virMacAddrFormat(&iface->mac, ifmac);
-    if (iface->type != VIR_DOMAIN_NET_TYPE_NETWORK ||
-        !iface->data.network.actual) {
-        virReportError(VIR_ERR_INTERNAL_ERROR,
-                       _("Cannot set bandwidth on interface '%s' of type %d"),
-                       ifmac, iface->type);
-        goto cleanup;
-    }
+    int plug_ret;
+    int ret = -1;
 
     /* generate new class_id */
     if ((class_id = networkNextClassID(net)) < 0) {
@@ -4840,10 +4866,50 @@ networkPlugBandwidth(virNetworkObjPtr net,
     }
     /* update rate for non guaranteed NICs */
     new_rate -= net->floor_sum;
-    if (virNetDevBandwidthUpdateRate(net->def->bridge, "1:2",
+    if (virNetDevBandwidthUpdateRate(net->def->bridge, 2,
                                      net->def->bandwidth, new_rate) < 0)
         VIR_WARN("Unable to update rate for 1:2 class on %s bridge",
                  net->def->bridge);
+
+    ret = 0;
+ cleanup:
+    return ret;
+}
+
+
+static int
+networkPlugBandwidth(virNetworkObjPtr net,
+                     virDomainNetDefPtr iface)
+{
+    int ret = -1;
+    int plug_ret;
+    unsigned long long new_rate = 0;
+    char ifmac[VIR_MAC_STRING_BUFLEN];
+    virNetDevBandwidthPtr ifaceBand = virDomainNetGetActualBandwidth(iface);
+
+    if ((plug_ret = networkCheckBandwidth(net, ifaceBand, NULL,
+                                          iface->mac, &new_rate)) < 0) {
+        /* helper reported error */
+        goto cleanup;
+    }
+
+    if (plug_ret > 0) {
+        /* no QoS needs to be set; claim success */
+        ret = 0;
+        goto cleanup;
+    }
+
+    virMacAddrFormat(&iface->mac, ifmac);
+    if (iface->type != VIR_DOMAIN_NET_TYPE_NETWORK ||
+        !iface->data.network.actual) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("Cannot set bandwidth on interface '%s' of type %d"),
+                       ifmac, iface->type);
+        goto cleanup;
+    }
+
+    if (networkPlugBandwidthImpl(net, iface, ifaceBand, new_rate) < 0)
+        goto cleanup;
 
     ret = 0;
 
@@ -4891,7 +4957,7 @@ networkUnplugBandwidth(virNetworkObjPtr net,
         }
         /* update rate for non guaranteed NICs */
         new_rate -= net->floor_sum;
-        if (virNetDevBandwidthUpdateRate(net->def->bridge, "1:2",
+        if (virNetDevBandwidthUpdateRate(net->def->bridge, 2,
                                          net->def->bandwidth, new_rate) < 0)
             VIR_WARN("Unable to update rate for 1:2 class on %s bridge",
                      net->def->bridge);
@@ -4916,4 +4982,142 @@ networkNetworkObjTaint(virNetworkObjPtr net,
                  uuidstr,
                  virNetworkTaintTypeToString(taint));
     }
+}
+
+
+static bool
+networkBandwidthGenericChecks(virDomainNetDefPtr iface,
+                              virNetDevBandwidthPtr newBandwidth)
+{
+    virNetDevBandwidthPtr ifaceBand;
+    unsigned long long old_floor, new_floor;
+
+    if (virDomainNetGetActualType(iface) != VIR_DOMAIN_NET_TYPE_NETWORK) {
+        /* This is not an interface that's plugged into a network.
+         * We don't care. Thus from our POV bandwidth change is allowed. */
+        return false;
+    }
+
+    ifaceBand = virDomainNetGetActualBandwidth(iface);
+    old_floor = new_floor = 0;
+
+    if (ifaceBand && ifaceBand->in)
+        old_floor = ifaceBand->in->floor;
+    if (newBandwidth && newBandwidth->in)
+        new_floor = newBandwidth->in->floor;
+
+    return new_floor != old_floor;
+}
+
+
+bool
+networkBandwidthChangeAllowed(virDomainNetDefPtr iface,
+                              virNetDevBandwidthPtr newBandwidth)
+{
+    virNetworkDriverStatePtr driver = networkGetDriver();
+    virNetworkObjPtr network = NULL;
+    virNetDevBandwidthPtr ifaceBand = virDomainNetGetActualBandwidth(iface);
+    bool ret = false;
+
+    if (!networkBandwidthGenericChecks(iface, newBandwidth))
+        return true;
+
+    network = virNetworkObjFindByName(driver->networks, iface->data.network.name);
+    if (!network) {
+        virReportError(VIR_ERR_NO_NETWORK,
+                       _("no network with matching name '%s'"),
+                       iface->data.network.name);
+        return false;
+    }
+
+    if (networkCheckBandwidth(network, newBandwidth, ifaceBand, iface->mac, NULL) < 0)
+        goto cleanup;
+
+    ret = true;
+
+ cleanup:
+    virNetworkObjEndAPI(&network);
+    return ret;
+}
+
+
+int
+networkBandwidthUpdate(virDomainNetDefPtr iface,
+                       virNetDevBandwidthPtr newBandwidth)
+{
+    virNetworkDriverStatePtr driver = networkGetDriver();
+    virNetworkObjPtr network = NULL;
+    virNetDevBandwidthPtr ifaceBand = virDomainNetGetActualBandwidth(iface);
+    unsigned long long new_rate = 0;
+    int plug_ret;
+    int ret = -1;
+
+    if (!networkBandwidthGenericChecks(iface, newBandwidth))
+        return 0;
+
+    network = virNetworkObjFindByName(driver->networks, iface->data.network.name);
+    if (!network) {
+        virReportError(VIR_ERR_NO_NETWORK,
+                       _("no network with matching name '%s'"),
+                       iface->data.network.name);
+        return ret;
+    }
+
+    if ((plug_ret = networkCheckBandwidth(network, newBandwidth, ifaceBand,
+                                          iface->mac, &new_rate)) < 0) {
+        /* helper reported error */
+        goto cleanup;
+    }
+
+    if (plug_ret > 0) {
+        /* no QoS needs to be set; claim success */
+        ret = 0;
+        goto cleanup;
+    }
+
+    /* Okay, there are three possible scenarios: */
+
+    if (ifaceBand && ifaceBand->in && ifaceBand->in->floor &&
+        newBandwidth && newBandwidth->in && newBandwidth->in->floor) {
+        /* Either we just need to update @floor .. */
+
+        if (virNetDevBandwidthUpdateRate(network->def->bridge,
+                                         iface->data.network.actual->class_id,
+                                         network->def->bandwidth,
+                                         newBandwidth->in->floor) < 0)
+            goto cleanup;
+
+        network->floor_sum -= ifaceBand->in->floor;
+        network->floor_sum += newBandwidth->in->floor;
+        new_rate -= network->floor_sum;
+
+        if (virNetDevBandwidthUpdateRate(network->def->bridge, 2,
+                                         network->def->bandwidth, new_rate) < 0 ||
+            virNetworkSaveStatus(driver->stateDir, network) < 0) {
+            /* Ouch, rollback */
+            network->floor_sum -= newBandwidth->in->floor;
+            network->floor_sum += ifaceBand->in->floor;
+
+            ignore_value(virNetDevBandwidthUpdateRate(network->def->bridge,
+                                                      iface->data.network.actual->class_id,
+                                                      network->def->bandwidth,
+                                                      ifaceBand->in->floor));
+            goto cleanup;
+        }
+    } else if (newBandwidth->in && newBandwidth->in->floor) {
+        /* .. or we need to plug in new .. */
+
+        if (networkPlugBandwidthImpl(network, iface, newBandwidth, new_rate) < 0)
+            goto cleanup;
+    } else {
+        /* .. or unplug old. */
+
+        if (networkUnplugBandwidth(network, iface) < 0)
+            goto cleanup;
+    }
+
+    ret = 0;
+ cleanup:
+    virNetworkObjEndAPI(&network);
+    return ret;
 }

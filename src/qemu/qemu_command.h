@@ -63,7 +63,7 @@ struct _qemuBuildCommandLineCallbacks {
                                       const char *adapter,
                                       unsigned int bus,
                                       unsigned int target,
-                                      unsigned int unit);
+                                      unsigned long long unit);
 };
 
 extern qemuBuildCommandLineCallbacks buildCommandLineCallbacks;
@@ -78,8 +78,7 @@ virCommandPtr qemuBuildCommandLine(virConnectPtr conn,
                                    virDomainChrSourceDefPtr monitor_chr,
                                    bool monitor_json,
                                    virQEMUCapsPtr qemuCaps,
-                                   const char *migrateFrom,
-                                   int migrateFd,
+                                   const char *migrateURI,
                                    virDomainSnapshotObjPtr current_snapshot,
                                    virNetDevVPortProfileOp vmop,
                                    qemuBuildCommandLineCallbacksPtr callbacks,
@@ -173,9 +172,7 @@ int qemuBuildMemoryBackendStr(unsigned long long size,
                               virJSONValuePtr *backendProps,
                               bool force);
 
-char *qemuBuildMemoryDeviceStr(virDomainMemoryDefPtr mem,
-                               virDomainDefPtr def,
-                               virQEMUCapsPtr qemuCaps);
+char *qemuBuildMemoryDeviceStr(virDomainMemoryDefPtr mem);
 
 /* Legacy, pre device support */
 char *qemuBuildPCIHostdevPCIDevStr(virDomainHostdevDefPtr dev,
@@ -193,6 +190,13 @@ int qemuBuildRNGBackendProps(virDomainRNGDefPtr rng,
                              virQEMUCapsPtr qemuCaps,
                              const char **type,
                              virJSONValuePtr *props);
+
+char *qemuBuildShmemDevStr(virDomainDefPtr def,
+                           virDomainShmemDefPtr shmem,
+                           virQEMUCapsPtr qemuCaps);
+char *qemuBuildShmemBackendStr(virDomainShmemDefPtr shmem,
+                               virQEMUCapsPtr qemuCaps);
+
 
 int qemuOpenPCIConfig(virDomainHostdevDefPtr dev);
 
@@ -221,7 +225,6 @@ char *qemuBuildRedirdevDevStr(virDomainDefPtr def,
 int qemuNetworkIfaceConnect(virDomainDefPtr def,
                             virQEMUDriverPtr driver,
                             virDomainNetDefPtr net,
-                            virQEMUCapsPtr qemuCaps,
                             int *tapfd,
                             size_t *tapfdSize)
     ATTRIBUTE_NONNULL(2);
@@ -229,7 +232,6 @@ int qemuNetworkIfaceConnect(virDomainDefPtr def,
 int qemuPhysIfaceConnect(virDomainDefPtr def,
                          virQEMUDriverPtr driver,
                          virDomainNetDefPtr net,
-                         virQEMUCapsPtr qemuCaps,
                          virNetDevVPortProfileOp vmop);
 
 int qemuOpenVhostNet(virDomainDefPtr def,
@@ -277,6 +279,7 @@ virDomainPCIAddressSetPtr qemuDomainPCIAddressSetCreate(virDomainDefPtr def,
                                                         bool dryRun);
 
 int qemuAssignDevicePCISlots(virDomainDefPtr def,
+                             virQEMUCapsPtr qemuCaps,
                              virDomainPCIAddressSetPtr addrs);
 
 int qemuAssignDeviceAliases(virDomainDefPtr def, virQEMUCapsPtr qemuCaps);
@@ -311,4 +314,10 @@ int qemuCheckDiskConfig(virDomainDiskDefPtr disk);
 
 bool
 qemuCheckFips(void);
+
+bool qemuCheckCCWS390AddressSupport(virDomainDefPtr def,
+                                    virDomainDeviceInfo info,
+                                    virQEMUCapsPtr qemuCaps,
+                                    const char *devicename);
+
 #endif /* __QEMU_COMMAND_H__*/

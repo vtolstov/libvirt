@@ -1,7 +1,7 @@
 /*
  * device_conf.h: device XML handling entry points
  *
- * Copyright (C) 2006-2012 Red Hat, Inc.
+ * Copyright (C) 2006-2012, 2014-2015 Red Hat, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -74,12 +74,15 @@ typedef enum {
     VIR_NET_DEV_FEAT_TXVLAN,
     VIR_NET_DEV_FEAT_NTUPLE,
     VIR_NET_DEV_FEAT_RXHASH,
+    VIR_NET_DEV_FEAT_RDMA,
+    VIR_NET_DEV_FEAT_TXUDPTNL,
     VIR_NET_DEV_FEAT_LAST
 } virNetDevFeature;
 
 VIR_ENUM_DECL(virNetDevFeature)
 
-int virDevicePCIAddressIsValid(virDevicePCIAddressPtr addr);
+int virDevicePCIAddressIsValid(virDevicePCIAddressPtr addr,
+                               bool report);
 
 int virDevicePCIAddressParseXML(xmlNodePtr node,
                                 virDevicePCIAddressPtr addr);

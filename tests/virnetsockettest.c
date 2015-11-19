@@ -105,7 +105,7 @@ checkProtocols(bool *hasIPv4, bool *hasIPv6,
         break;
     }
 
-    VIR_DEBUG("Choose port %d\n", *freePort);
+    VIR_DEBUG("Choose port %d", *freePort);
 
     ret = 0;
 
@@ -406,7 +406,7 @@ static int testSocketSSH(const void *opaque)
         }
         buf[rv] = '\0';
 
-        if (!STREQ(buf, data->expectOut)) {
+        if (STRNEQ(buf, data->expectOut)) {
             virtTestDifference(stderr, data->expectOut, buf);
             goto cleanup;
         }

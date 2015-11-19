@@ -136,8 +136,7 @@ apidir = $(pkgdatadir)/api
 api_DATA = \
        libvirt-api.xml \
        libvirt-qemu-api.xml \
-       libvirt-lxc-api.xml \
-       libvirt-admin-api.xml
+       libvirt-lxc-api.xml
 
 fig = \
   libvirt-net-logical.fig \
@@ -157,13 +156,13 @@ EXTRA_DIST=					\
   hacking1.xsl hacking2.xsl wrapstring.xsl \
   $(dot_html) $(dot_html_in) $(gif) $(apihtml) $(apipng) \
   $(devhelphtml) $(devhelppng) $(devhelpcss) $(devhelpxsl) \
-  $(xml) $(qemu_xml) $(lxc_xml) $(admin_xml) $(fig) $(png) $(css) \
+  $(xml) $(qemu_xml) $(lxc_xml) $(fig) $(png) $(css) \
   $(patches) $(dot_php_in) $(dot_php_code_in) $(dot_php)\
   $(internals_html_in) $(internals_html) \
   sitemap.html.in aclperms.htmlinc \
   todo.pl hvsupport.pl todo.cfg-example
 
-acl.html:: $(srcdir)/aclperms.htmlinc
+acl_generated = aclperms.htmlinc
 
 $(srcdir)/aclperms.htmlinc: $(top_srcdir)/src/access/viraccessperm.h \
         $(srcdir)/genaclperms.pl Makefile.am
@@ -205,7 +204,7 @@ todo:
 	rm -f todo.html.in
 	$(MAKE) todo.html
 
-hvsupport.html:: $(srcdir)/hvsupport.html.in
+hvsupport.html: $(srcdir)/hvsupport.html.in
 
 $(srcdir)/hvsupport.html.in: $(srcdir)/hvsupport.pl $(api_DATA) \
 		$(top_srcdir)/src/libvirt_public.syms \
@@ -228,7 +227,7 @@ internals/%.html.tmp: internals/%.html.in subsite.xsl page.xsl sitemap.html.in
 	    $(top_srcdir)/docs/subsite.xsl $< > $@ \
 	    || { rm $@ && exit 1; }; fi
 
-%.html.tmp: %.html.in site.xsl page.xsl sitemap.html.in
+%.html.tmp: %.html.in site.xsl page.xsl sitemap.html.in $(acl_generated)
 	@if [ -x $(XSLTPROC) ] ; then \
 	  echo "Generating $@"; \
 	  name=`echo $@ | sed -e 's/.tmp//'`; \

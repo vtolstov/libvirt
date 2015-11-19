@@ -119,6 +119,114 @@ testJSONAddRemove(const void *data)
 
 
 static int
+testJSONLookup(const void *data)
+{
+    const struct testInfo *info = data;
+    virJSONValuePtr json;
+    virJSONValuePtr value = NULL;
+    char *result = NULL;
+    int rc;
+    int number;
+    const char *str;
+    int ret = -1;
+
+    json = virJSONValueFromString(info->doc);
+    if (!json) {
+        VIR_TEST_VERBOSE("Fail to parse %s\n", info->doc);
+        ret = -1;
+        goto cleanup;
+    }
+
+    value = virJSONValueObjectGetObject(json, "a");
+    if (value) {
+        if (!info->pass) {
+            VIR_TEST_VERBOSE("lookup for 'a' in '%s' should have failed\n",
+                             info->doc);
+            goto cleanup;
+        } else {
+            result = virJSONValueToString(value, false);
+            if (STRNEQ_NULLABLE(result, "{}")) {
+                VIR_TEST_VERBOSE("lookup for 'a' in '%s' found '%s' but "
+                                 "should have found '{}'\n",
+                                 info->doc, NULLSTR(result));
+                goto cleanup;
+            }
+            VIR_FREE(result);
+        }
+    } else if (info->pass) {
+        VIR_TEST_VERBOSE("lookup for 'a' in '%s' should have succeeded\n",
+                         info->doc);
+        goto cleanup;
+    }
+
+    number = 2;
+    rc = virJSONValueObjectGetNumberInt(json, "b", &number);
+    if (rc == 0) {
+        if (!info->pass) {
+            VIR_TEST_VERBOSE("lookup for 'b' in '%s' should have failed\n",
+                             info->doc);
+            goto cleanup;
+        } else if (number != 1) {
+            VIR_TEST_VERBOSE("lookup for 'b' in '%s' found %d but "
+                             "should have found 1\n",
+                             info->doc, number);
+            goto cleanup;
+        }
+    } else if (info->pass) {
+        VIR_TEST_VERBOSE("lookup for 'b' in '%s' should have succeeded\n",
+                         info->doc);
+        goto cleanup;
+    }
+
+    str = virJSONValueObjectGetString(json, "c");
+    if (str) {
+        if (!info->pass) {
+            VIR_TEST_VERBOSE("lookup for 'c' in '%s' should have failed\n",
+                             info->doc);
+            goto cleanup;
+        } else if (STRNEQ(str, "str")) {
+            VIR_TEST_VERBOSE("lookup for 'c' in '%s' found '%s' but "
+                             "should have found 'str'\n", info->doc, str);
+                goto cleanup;
+        }
+    } else if (info->pass) {
+        VIR_TEST_VERBOSE("lookup for 'c' in '%s' should have succeeded\n",
+                         info->doc);
+        goto cleanup;
+    }
+
+    value = virJSONValueObjectGetArray(json, "d");
+    if (value) {
+        if (!info->pass) {
+            VIR_TEST_VERBOSE("lookup for 'd' in '%s' should have failed\n",
+                             info->doc);
+            goto cleanup;
+        } else {
+            result = virJSONValueToString(value, false);
+            if (STRNEQ_NULLABLE(result, "[]")) {
+                VIR_TEST_VERBOSE("lookup for 'd' in '%s' found '%s' but "
+                                 "should have found '[]'\n",
+                                 info->doc, NULLSTR(result));
+                goto cleanup;
+            }
+            VIR_FREE(result);
+        }
+    } else if (info->pass) {
+        VIR_TEST_VERBOSE("lookup for 'd' in '%s' should have succeeded\n",
+                         info->doc);
+        goto cleanup;
+    }
+
+    ret = 0;
+
+ cleanup:
+    virJSONValueFree(json);
+    VIR_FREE(result);
+    return ret;
+}
+
+
+static int
 testJSONCopy(const void *data)
 {
     const struct testInfo *info = data;
@@ -304,6 +412,17 @@ mymain(void)
     DO_TEST_PARSE("string", "[ \"The meaning of life\" ]");
     DO_TEST_PARSE_FAIL("unterminated string", "[ \"The meaning of lif ]");
 
+    DO_TEST_PARSE("integer", "1");
+    DO_TEST_PARSE("boolean", "true");
+    DO_TEST_PARSE("null", "null");
+    DO_TEST_PARSE_FAIL("incomplete keyword", "tr");
+    DO_TEST_PARSE_FAIL("overdone keyword", "[ truest ]");
+    DO_TEST_PARSE_FAIL("unknown keyword", "huh");
+    DO_TEST_PARSE_FAIL("comments", "[ /* nope */\n1 // not this either\n]");
+    DO_TEST_PARSE_FAIL("trailing garbage", "[] []");
+    DO_TEST_PARSE_FAIL("list without array", "1, 1");
+    DO_TEST_PARSE_FAIL("parser abuse", "1] [2");
+    DO_TEST_PARSE_FAIL("invalid UTF-8", "\"\x80\"");
 
     DO_TEST_PARSE_FAIL("object with numeric keys", "{ 1:1, 2:1, 3:2 }");
     DO_TEST_PARSE_FAIL("unterminated object", "{ \"1\":1, \"2\":1, \"3\":2");
@@ -312,6 +431,22 @@ mymain(void)
     DO_TEST_PARSE_FAIL("array of an object with an array as a key",
                        "[ {[\"key1\", \"key2\"]: \"value\"} ]");
     DO_TEST_PARSE_FAIL("object with unterminated key", "{ \"key:7 }");
+    DO_TEST_PARSE_FAIL("duplicate key", "{ \"a\": 1, \"a\": 1 }");
+
+    DO_TEST_FULL("lookup on array", Lookup,
+                 "[ 1 ]", NULL, false);
+    DO_TEST_FULL("lookup on string", Lookup,
+                 "\"str\"", NULL, false);
+    DO_TEST_FULL("lookup on integer", Lookup,
+                 "1", NULL, false);
+    DO_TEST_FULL("lookup with missing key", Lookup,
+                 "{ }", NULL, false);
+    DO_TEST_FULL("lookup with wrong type", Lookup,
+                 "{ \"a\": 1, \"b\": \"str\", \"c\": [], \"d\": {} }",
+                 NULL, false);
+    DO_TEST_FULL("lookup with correct type", Lookup,
+                 "{ \"a\": {}, \"b\": 1, \"c\": \"str\", \"d\": [] }",
+                 NULL, true);
 
     return (ret == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -507,7 +507,7 @@ xend_op_ext(virConnectPtr xend, const char *path, const char *key, va_list ap)
         return -1;
 
     content = virBufferContentAndReset(&buf);
-    VIR_DEBUG("xend op: %s\n", content);
+    VIR_DEBUG("xend op: %s", content);
     ret = http2unix(xend_post(xend, path, content));
     VIR_FREE(content);
 
@@ -2552,7 +2552,7 @@ xenDaemonDomainSetAutostart(virConnectPtr conn,
     if (autonode) {
         const char *val = (autonode->u.s.car->kind == SEXPR_VALUE
                            ? autonode->u.s.car->u.value : NULL);
-        if (!val || (!STREQ(val, "ignore") && !STREQ(val, "start"))) {
+        if (!val || (STRNEQ(val, "ignore") && STRNEQ(val, "start"))) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
                            "%s", _("unexpected value from on_xend_start"));
             goto error;

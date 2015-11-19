@@ -62,7 +62,6 @@ VIR_LOG_INIT("locking.lock_daemon");
 struct _virLockDaemon {
     virMutex lock;
     virNetDaemonPtr dmn;
-    virNetServerPtr srv;
     virHashTablePtr lockspaces;
     virLockSpacePtr defaultLockspace;
 };
@@ -119,7 +118,6 @@ virLockDaemonFree(virLockDaemonPtr lockd)
     if (!lockd)
         return;
 
-    virObjectUnref(lockd->srv);
     virObjectUnref(lockd->dmn);
     virHashFree(lockd->lockspaces);
     virLockSpaceFree(lockd->defaultLockspace);
@@ -127,6 +125,17 @@ virLockDaemonFree(virLockDaemonPtr lockd)
     VIR_FREE(lockd);
 }
 
+static inline void
+virLockDaemonLock(virLockDaemonPtr lockd)
+{
+    virMutexLock(&lockd->lock);
+}
+
+static inline void
+virLockDaemonUnlock(virLockDaemonPtr lockd)
+{
+    virMutexUnlock(&lockd->lock);
+}
 
 static void virLockDaemonLockSpaceDataFree(void *data,
                                            const void *key ATTRIBUTE_UNUSED)
@@ -138,6 +147,7 @@ static virLockDaemonPtr
 virLockDaemonNew(virLockDaemonConfigPtr config, bool privileged)
 {
     virLockDaemonPtr lockd;
+    virNetServerPtr srv;
 
     if (VIR_ALLOC(lockd) < 0)
         return NULL;
@@ -149,17 +159,17 @@ virLockDaemonNew(virLockDaemonConfigPtr config, bool privileged)
         return NULL;
     }
 
-    if (!(lockd->srv = virNetServerNew(1, 1, 0, config->max_clients,
-                                       config->max_clients, -1, 0,
-                                       false, NULL,
-                                       virLockDaemonClientNew,
-                                       virLockDaemonClientPreExecRestart,
-                                       virLockDaemonClientFree,
-                                       (void*)(intptr_t)(privileged ? 0x1 : 0x0))))
+    if (!(srv = virNetServerNew(1, 1, 0, config->max_clients,
+                                config->max_clients, -1, 0,
+                                NULL,
+                                virLockDaemonClientNew,
+                                virLockDaemonClientPreExecRestart,
+                                virLockDaemonClientFree,
+                                (void*)(intptr_t)(privileged ? 0x1 : 0x0))))
         goto error;
 
     if (!(lockd->dmn = virNetDaemonNew()) ||
-        virNetDaemonAddServer(lockd->dmn, lockd->srv) < 0)
+        virNetDaemonAddServer(lockd->dmn, srv) < 0)
         goto error;
 
     if (!(lockd->lockspaces = virHashCreate(VIR_LOCK_DAEMON_NUM_LOCKSPACES,
@@ -183,8 +193,9 @@ virLockDaemonNewPostExecRestart(virJSONValuePtr object, bool privileged)
     virLockDaemonPtr lockd;
     virJSONValuePtr child;
     virJSONValuePtr lockspaces;
+    virNetServerPtr srv;
     size_t i;
-    int n;
+    ssize_t n;
 
     if (VIR_ALLOC(lockd) < 0)
         return NULL;
@@ -254,12 +265,12 @@ virLockDaemonNewPostExecRestart(virJSONValuePtr object, bool privileged)
     if (!(lockd->dmn = virNetDaemonNewPostExecRestart(child)))
         goto error;
 
-    if (!(lockd->srv = virNetDaemonAddServerPostExec(lockd->dmn,
-                                                     virLockDaemonClientNew,
-                                                     virLockDaemonClientNewPostExecRestart,
-                                                     virLockDaemonClientPreExecRestart,
-                                                     virLockDaemonClientFree,
-                                                     (void*)(intptr_t)(privileged ? 0x1 : 0x0))))
+    if (!(srv = virNetDaemonAddServerPostExec(lockd->dmn,
+                                              virLockDaemonClientNew,
+                                              virLockDaemonClientNewPostExecRestart,
+                                              virLockDaemonClientPreExecRestart,
+                                              virLockDaemonClientFree,
+                                              (void*)(intptr_t)(privileged ? 0x1 : 0x0))))
         goto error;
 
     return lockd;
@@ -275,9 +286,9 @@ int virLockDaemonAddLockSpace(virLockDaemonPtr lockd,
                               virLockSpacePtr lockspace)
 {
     int ret;
-    virMutexLock(&lockd->lock);
+    virLockDaemonLock(lockd);
     ret = virHashAddEntry(lockd->lockspaces, path, lockspace);
-    virMutexUnlock(&lockd->lock);
+    virLockDaemonUnlock(lockd);
     return ret;
 }
 
@@ -285,12 +296,12 @@ virLockSpacePtr virLockDaemonFindLockSpace(virLockDaemonPtr lockd,
                                            const char *path)
 {
     virLockSpacePtr lockspace;
-    virMutexLock(&lockd->lock);
+    virLockDaemonLock(lockd);
     if (path && STRNEQ(path, ""))
         lockspace = virHashLookup(lockd->lockspaces, path);
     else
         lockspace = lockd->defaultLockspace;
-    virMutexUnlock(&lockd->lock);
+    virLockDaemonUnlock(lockd);
     return lockspace;
 }
 
@@ -675,14 +686,14 @@ virLockDaemonClientFree(void *opaque)
 
         /* Release all locks associated with this
          * owner in all lockspaces */
-        virMutexLock(&lockDaemon->lock);
+        virLockDaemonLock(lockDaemon);
         virHashForEach(lockDaemon->lockspaces,
                        virLockDaemonClientReleaseLockspace,
                        &data);
         virLockDaemonClientReleaseLockspace(lockDaemon->defaultLockspace,
                                             "",
                                             &data);
-        virMutexUnlock(&lockDaemon->lock);
+        virLockDaemonUnlock(lockDaemon);
 
         /* If the client had some active leases when it
          * closed the connection, we must kill it off
@@ -1130,6 +1141,7 @@ virLockDaemonUsage(const char *argv0, bool privileged)
 }
 
 int main(int argc, char **argv) {
+    virNetServerPtr srv = NULL;
     virNetServerProgramPtr lockProgram = NULL;
     char *remote_config_file = NULL;
     int statuswrite = -1;
@@ -1321,10 +1333,9 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
-    /* rv == 1, means we setup everything from saved state,
-     * so only (possibly) daemonize and setup stuff from
-     * scratch if rv == 0
-     */
+    /* rv == 1 means we successfully restored from the saved internal state
+     * (but still need to add @lockProgram into @srv). rv == 0 means that no
+     * saved state is present, therefore initialize from scratch here. */
     if (rv == 0) {
         if (godaemon) {
             char ebuf[1024];
@@ -1353,17 +1364,20 @@ int main(int argc, char **argv) {
             goto cleanup;
         }
 
-        if ((rv = virLockDaemonSetupNetworkingSystemD(lockDaemon->srv)) < 0) {
+        srv = virNetDaemonGetServer(lockDaemon->dmn, 0);
+        if ((rv = virLockDaemonSetupNetworkingSystemD(srv) < 0)) {
             ret = VIR_LOCK_DAEMON_ERR_NETWORK;
             goto cleanup;
         }
 
         /* Only do this, if systemd did not pass a FD */
         if (rv == 0 &&
-            virLockDaemonSetupNetworkingNative(lockDaemon->srv, sock_file) < 0) {
+            virLockDaemonSetupNetworkingNative(srv, sock_file) < 0) {
             ret = VIR_LOCK_DAEMON_ERR_NETWORK;
             goto cleanup;
         }
+    } else if (rv == 1) {
+        srv = virNetDaemonGetServer(lockDaemon->dmn, 0);
     }
 
     if (timeout != -1) {
@@ -1385,7 +1399,7 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
-    if (virNetServerAddProgram(lockDaemon->srv, lockProgram) < 0) {
+    if (virNetServerAddProgram(srv, lockProgram) < 0) {
         ret = VIR_LOCK_DAEMON_ERR_INIT;
         goto cleanup;
     }
@@ -1420,6 +1434,7 @@ int main(int argc, char **argv) {
         ret = 0;
 
  cleanup:
+    virObjectUnref(srv);
     virObjectUnref(lockProgram);
     virLockDaemonFree(lockDaemon);
     if (statuswrite != -1) {

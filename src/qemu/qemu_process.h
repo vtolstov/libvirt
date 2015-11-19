@@ -44,6 +44,26 @@ void qemuProcessReconnectAll(virConnectPtr conn, virQEMUDriverPtr driver);
 
 int qemuProcessAssignPCIAddresses(virDomainDefPtr def);
 
+typedef struct _qemuProcessIncomingDef qemuProcessIncomingDef;
+typedef qemuProcessIncomingDef *qemuProcessIncomingDefPtr;
+struct _qemuProcessIncomingDef {
+    char *launchURI; /* used as a parameter for -incoming command line option */
+    char *deferredURI; /* used when calling migrate-incoming QMP command */
+    int fd; /* for fd:N URI */
+    const char *path; /* path associated with fd */
+};
+
+qemuProcessIncomingDefPtr qemuProcessIncomingDefNew(virQEMUCapsPtr qemuCaps,
+                                                    const char *migrateFrom,
+                                                    int fd,
+                                                    const char *path);
+void qemuProcessIncomingDefFree(qemuProcessIncomingDefPtr inc);
+
+int qemuProcessBeginJob(virQEMUDriverPtr driver,
+                        virDomainObjPtr vm);
+void qemuProcessEndJob(virQEMUDriverPtr driver,
+                       virDomainObjPtr vm);
+
 typedef enum {
     VIR_QEMU_PROCESS_START_COLD         = 1 << 0,
     VIR_QEMU_PROCESS_START_PAUSED       = 1 << 1,
@@ -53,7 +73,7 @@ typedef enum {
 int qemuProcessStart(virConnectPtr conn,
                      virQEMUDriverPtr driver,
                      virDomainObjPtr vm,
-                     int asyncJob,
+                     qemuDomainAsyncJob asyncJob,
                      const char *migrateFrom,
                      int stdin_fd,
                      const char *stdin_path,

@@ -164,7 +164,6 @@ virQEMUDriverConfigPtr virQEMUDriverConfigNew(bool privileged)
     if (!(cfg = virObjectNew(virQEMUDriverConfigClass)))
         return NULL;
 
-    cfg->privileged = privileged;
     cfg->uri = privileged ? "qemu:///system" : "qemu:///session";
 
     if (privileged) {
@@ -296,7 +295,7 @@ virQEMUDriverConfigPtr virQEMUDriverConfigNew(bool privileged)
             goto error;
     }
 
-    if (VIR_STRDUP(cfg->bridgeHelperName, "/usr/libexec/qemu-bridge-helper") < 0)
+    if (VIR_STRDUP(cfg->bridgeHelperName, QEMU_BRIDGE_HELPER) < 0)
         goto error;
 
     cfg->clearEmulatorCapabilities = true;
@@ -873,6 +872,12 @@ virQEMUDriverConfigPtr virQEMUDriverGetConfig(virQEMUDriverPtr driver)
     return conf;
 }
 
+bool
+virQEMUDriverIsPrivileged(virQEMUDriverPtr driver)
+{
+    return driver->privileged;
+}
+
 virDomainXMLOptionPtr
 virQEMUDriverCreateXMLConf(virQEMUDriverPtr driver)
 {
@@ -1013,6 +1018,69 @@ qemuGetSharedDeviceKey(const char *device_path)
     return key;
 }
 
+/*
+ * Make necessary checks for the need to check and for the current setting
+ * of the 'unpriv_sgio' value for the device_path passed.
+ *
+ * Returns:
+ *  0 - Success
+ * -1 - Some failure which would already have been messaged
+ * -2 - Mismatch with the "shared" sgio setting - needs to be messaged
+ *      by caller since it has context of which type of disk resource is
+ *      being used and in the future the hostdev information.
+ */
+static int
+qemuCheckUnprivSGIO(virHashTablePtr sharedDevices,
+                    const char *device_path,
+                    int sgio)
+{
+    char *sysfs_path = NULL;
+    char *key = NULL;
+    int val;
+    int ret = -1;
+
+    if (!(sysfs_path = virGetUnprivSGIOSysfsPath(device_path, NULL)))
+        goto cleanup;
+
+    /* It can't be conflict if unpriv_sgio is not supported by kernel. */
+    if (!virFileExists(sysfs_path)) {
+        ret = 0;
+        goto cleanup;
+    }
+
+    if (!(key = qemuGetSharedDeviceKey(device_path)))
+        goto cleanup;
+
+    /* It can't be conflict if no other domain is sharing it. */
+    if (!(virHashLookup(sharedDevices, key))) {
+        ret = 0;
+        goto cleanup;
+    }
+
+    if (virGetDeviceUnprivSGIO(device_path, NULL, &val) < 0)
+        goto cleanup;
+
+    /* Error message on failure needs to be handled in caller
+     * since there is more specific knowledge of device
+     */
+    if (!((val == 0 &&
+           (sgio == VIR_DOMAIN_DEVICE_SGIO_FILTERED ||
+            sgio == VIR_DOMAIN_DEVICE_SGIO_DEFAULT)) ||
+          (val == 1 &&
+           sgio == VIR_DOMAIN_DEVICE_SGIO_UNFILTERED))) {
+        ret = -2;
+        goto cleanup;
+    }
+
+    ret = 0;
+
+ cleanup:
+    VIR_FREE(sysfs_path);
+    VIR_FREE(key);
+    return ret;
+}
+
+
 /* Check if a shared device's setting conflicts with the conf
  * used by other domain(s). Currently only checks the sgio
  * setting. Note that this should only be called for disk with
@@ -1024,62 +1092,31 @@ static int
 qemuCheckSharedDisk(virHashTablePtr sharedDevices,
                     virDomainDiskDefPtr disk)
 {
-    char *sysfs_path = NULL;
-    char *key = NULL;
-    int val;
-    int ret = -1;
+    int ret;
 
     if (disk->device != VIR_DOMAIN_DISK_DEVICE_LUN)
         return 0;
 
-    if (!(sysfs_path = virGetUnprivSGIOSysfsPath(disk->src->path, NULL)))
-        goto cleanup;
-
-    /* It can't be conflict if unpriv_sgio is not supported by kernel. */
-    if (!virFileExists(sysfs_path)) {
-        ret = 0;
-        goto cleanup;
-    }
-
-    if (!(key = qemuGetSharedDeviceKey(disk->src->path)))
-        goto cleanup;
-
-    /* It can't be conflict if no other domain is sharing it. */
-    if (!(virHashLookup(sharedDevices, key))) {
-        ret = 0;
-        goto cleanup;
-    }
-
-    if (virGetDeviceUnprivSGIO(disk->src->path, NULL, &val) < 0)
-        goto cleanup;
-
-    if (!((val == 0 &&
-           (disk->sgio == VIR_DOMAIN_DEVICE_SGIO_FILTERED ||
-            disk->sgio == VIR_DOMAIN_DEVICE_SGIO_DEFAULT)) ||
-          (val == 1 &&
-           disk->sgio == VIR_DOMAIN_DEVICE_SGIO_UNFILTERED))) {
-
-        if (virDomainDiskGetType(disk) == VIR_STORAGE_TYPE_VOLUME) {
-            virReportError(VIR_ERR_OPERATION_INVALID,
-                           _("sgio of shared disk 'pool=%s' 'volume=%s' conflicts "
-                             "with other active domains"),
-                           disk->src->srcpool->pool,
-                           disk->src->srcpool->volume);
-        } else {
-            virReportError(VIR_ERR_OPERATION_INVALID,
-                           _("sgio of shared disk '%s' conflicts with other "
-                             "active domains"), disk->src->path);
+    if ((ret = qemuCheckUnprivSGIO(sharedDevices, disk->src->path,
+                                   disk->sgio)) < 0) {
+        if (ret == -2) {
+            if (virDomainDiskGetType(disk) == VIR_STORAGE_TYPE_VOLUME) {
+                virReportError(VIR_ERR_OPERATION_INVALID,
+                               _("sgio of shared disk 'pool=%s' 'volume=%s' "
+                                 "conflicts with other active domains"),
+                               disk->src->srcpool->pool,
+                               disk->src->srcpool->volume);
+            } else {
+                virReportError(VIR_ERR_OPERATION_INVALID,
+                               _("sgio of shared disk '%s' conflicts with "
+                                 "other active domains"),
+                               disk->src->path);
+            }
         }
-
-        goto cleanup;
+        return -1;
     }
 
-    ret = 0;
-
- cleanup:
-    VIR_FREE(sysfs_path);
-    VIR_FREE(key);
-    return ret;
+    return 0;
 }
 
 
@@ -1173,7 +1210,7 @@ qemuAddSharedDisk(virQEMUDriverPtr driver,
     char *key = NULL;
     int ret = -1;
 
-    if (!disk->src->shared || !virDomainDiskSourceIsBlockType(disk->src))
+    if (!disk->src->shared || !virDomainDiskSourceIsBlockType(disk->src, false))
         return 0;
 
     qemuDriverLock(driver);
@@ -1196,14 +1233,24 @@ qemuAddSharedDisk(virQEMUDriverPtr driver,
 }
 
 
+static bool
+qemuIsSharedHostdev(virDomainHostdevDefPtr hostdev)
+{
+    return (hostdev->shareable &&
+        (hostdev->mode == VIR_DOMAIN_HOSTDEV_MODE_SUBSYS &&
+         hostdev->source.subsys.type == VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_SCSI &&
+         hostdev->source.subsys.u.scsi.protocol !=
+         VIR_DOMAIN_HOSTDEV_SCSI_PROTOCOL_TYPE_ISCSI));
+}
+
+
 static char *
-qemuGetSharedHostdevKey(virDomainHostdevDefPtr hostdev)
+qemuGetHostdevPath(virDomainHostdevDefPtr hostdev)
 {
     virDomainHostdevSubsysSCSIPtr scsisrc = &hostdev->source.subsys.u.scsi;
     virDomainHostdevSubsysSCSIHostPtr scsihostsrc = &scsisrc->u.host;
     char *dev_name = NULL;
     char *dev_path = NULL;
-    char *key = NULL;
 
     if (!(dev_name = virSCSIDeviceGetDevName(NULL,
                                              scsihostsrc->adapter,
@@ -1212,40 +1259,38 @@ qemuGetSharedHostdevKey(virDomainHostdevDefPtr hostdev)
                                              scsihostsrc->unit)))
         goto cleanup;
 
-    if (virAsprintf(&dev_path, "/dev/%s", dev_name) < 0)
-        goto cleanup;
-
-    if (!(key = qemuGetSharedDeviceKey(dev_path)))
-        goto cleanup;
+    ignore_value(virAsprintf(&dev_path, "/dev/%s", dev_name));
 
  cleanup:
     VIR_FREE(dev_name);
-    VIR_FREE(dev_path);
-
-    return key;
+    return dev_path;
 }
+
 
 static int
 qemuAddSharedHostdev(virQEMUDriverPtr driver,
                      virDomainHostdevDefPtr hostdev,
                      const char *name)
 {
+    char *dev_path = NULL;
     char *key = NULL;
     int ret = -1;
 
-    if (!hostdev->shareable ||
-        !(hostdev->mode == VIR_DOMAIN_HOSTDEV_MODE_SUBSYS &&
-          hostdev->source.subsys.type == VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_SCSI &&
-          hostdev->source.subsys.u.scsi.protocol != VIR_DOMAIN_HOSTDEV_SCSI_PROTOCOL_TYPE_ISCSI))
+    if (!qemuIsSharedHostdev(hostdev))
         return 0;
 
-    if (!(key = qemuGetSharedHostdevKey(hostdev)))
-        return -1;
+    if (!(dev_path = qemuGetHostdevPath(hostdev)))
+        goto cleanup;
+
+    if (!(key = qemuGetSharedDeviceKey(dev_path)))
+        goto cleanup;
 
     qemuDriverLock(driver);
     ret = qemuSharedDeviceEntryInsert(driver, key, name);
     qemuDriverUnlock(driver);
 
+ cleanup:
+    VIR_FREE(dev_path);
     VIR_FREE(key);
     return ret;
 }
@@ -1310,7 +1355,7 @@ qemuRemoveSharedDisk(virQEMUDriverPtr driver,
     char *key = NULL;
     int ret = -1;
 
-    if (!disk->src->shared || !virDomainDiskSourceIsBlockType(disk->src))
+    if (!disk->src->shared || !virDomainDiskSourceIsBlockType(disk->src, false))
         return 0;
 
     qemuDriverLock(driver);
@@ -1334,22 +1379,25 @@ qemuRemoveSharedHostdev(virQEMUDriverPtr driver,
                         virDomainHostdevDefPtr hostdev,
                         const char *name)
 {
+    char *dev_path = NULL;
     char *key = NULL;
-    int ret;
+    int ret = -1;
 
-    if (!hostdev->shareable ||
-        !(hostdev->mode == VIR_DOMAIN_HOSTDEV_MODE_SUBSYS &&
-          hostdev->source.subsys.type == VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_SCSI &&
-          hostdev->source.subsys.u.scsi.protocol != VIR_DOMAIN_HOSTDEV_SCSI_PROTOCOL_TYPE_ISCSI))
+    if (!qemuIsSharedHostdev(hostdev))
         return 0;
 
-    if (!(key = qemuGetSharedHostdevKey(hostdev)))
-        return -1;
+    if (!(dev_path = qemuGetHostdevPath(hostdev)))
+        goto cleanup;
+
+    if (!(key = qemuGetSharedDeviceKey(dev_path)))
+        goto cleanup;
 
     qemuDriverLock(driver);
     ret = qemuSharedDeviceEntryRemove(driver, key, name);
     qemuDriverUnlock(driver);
 
+ cleanup:
+    VIR_FREE(dev_path);
     VIR_FREE(key);
     return ret;
 }
@@ -1386,7 +1434,7 @@ qemuSetUnprivSGIO(virDomainDeviceDefPtr dev)
     char *sysfs_path = NULL;
     const char *path = NULL;
     int val = -1;
-    int ret = 0;
+    int ret = -1;
 
     /* "sgio" is only valid for block disk; cdrom
      * and floopy disk can have empty source.
@@ -1395,22 +1443,20 @@ qemuSetUnprivSGIO(virDomainDeviceDefPtr dev)
         disk = dev->data.disk;
 
         if (disk->device != VIR_DOMAIN_DISK_DEVICE_LUN ||
-            !virDomainDiskSourceIsBlockType(disk->src))
+            !virDomainDiskSourceIsBlockType(disk->src, false))
             return 0;
 
         path = virDomainDiskGetSource(disk);
     } else if (dev->type == VIR_DOMAIN_DEVICE_HOSTDEV) {
         hostdev = dev->data.hostdev;
 
+        if (!qemuIsSharedHostdev(hostdev))
+            return 0;
 
-        if (hostdev->mode == VIR_DOMAIN_HOSTDEV_MODE_SUBSYS &&
-            hostdev->source.subsys.type ==
-            VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_SCSI &&
-            hostdev->source.subsys.u.scsi.sgio) {
+        if (hostdev->source.subsys.u.scsi.sgio) {
             virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                            _("'sgio' is not supported for SCSI "
                              "generic device yet "));
-            ret = -1;
             goto cleanup;
         }
 
@@ -1419,11 +1465,8 @@ qemuSetUnprivSGIO(virDomainDeviceDefPtr dev)
         return 0;
     }
 
-    sysfs_path = virGetUnprivSGIOSysfsPath(path, NULL);
-    if (sysfs_path == NULL) {
-        ret = -1;
+    if (!(sysfs_path = virGetUnprivSGIOSysfsPath(path, NULL)))
         goto cleanup;
-    }
 
     /* By default, filter the SG_IO commands, i.e. set unpriv_sgio to 0.  */
     val = (disk->sgio == VIR_DOMAIN_DEVICE_SGIO_UNFILTERED);
@@ -1434,7 +1477,9 @@ qemuSetUnprivSGIO(virDomainDeviceDefPtr dev)
      */
     if ((virFileExists(sysfs_path) || val == 1) &&
         virSetDeviceUnprivSGIO(path, NULL, val) < 0)
-        ret = -1;
+        goto cleanup;
+
+    ret = 0;
 
  cleanup:
     VIR_FREE(sysfs_path);
@@ -1443,7 +1488,7 @@ qemuSetUnprivSGIO(virDomainDeviceDefPtr dev)
 
 int qemuDriverAllocateID(virQEMUDriverPtr driver)
 {
-    return virAtomicIntInc(&driver->nextvmid);
+    return virAtomicIntInc(&driver->lastvmid);
 }
 
 

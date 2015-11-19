@@ -114,11 +114,6 @@ static const char testStatusXMLPrefix[] =
 "    <vcpu pid='3803519'/>\n"
 "  </vcpus>\n"
 "  <qemuCaps>\n"
-"    <flag name='vnc-colon'/>\n"
-"    <flag name='no-reboot'/>\n"
-"    <flag name='drive'/>\n"
-"    <flag name='name'/>\n"
-"    <flag name='uuid'/>\n"
 "    <flag name='vnet-hdr'/>\n"
 "    <flag name='qxl.vgamem_mb'/>\n"
 "    <flag name='qxl-vga.vgamem_mb'/>\n"
@@ -130,7 +125,8 @@ static const char testStatusXMLPrefix[] =
 "    <device alias='serial0'/>\n"
 "    <device alias='net0'/>\n"
 "    <device alias='usb'/>\n"
-"  </devices>\n";
+"  </devices>\n"
+"  <numad nodeset='0-2'/>\n";
 
 static const char testStatusXMLSuffix[] =
 "</domstatus>\n";
@@ -179,8 +175,7 @@ testCompareStatusXMLToXMLFiles(const void *opaque)
                                       driver.caps, driver.xmlopt,
                                       VIR_DOMAIN_DEF_PARSE_STATUS |
                                       VIR_DOMAIN_DEF_PARSE_ACTUAL_NET |
-                                      VIR_DOMAIN_DEF_PARSE_PCI_ORIG_STATES |
-                                      VIR_DOMAIN_DEF_PARSE_CLOCK_ADJUST))) {
+                                      VIR_DOMAIN_DEF_PARSE_PCI_ORIG_STATES))) {
         fprintf(stderr, "Failed to parse domain status XML:\n%s", source);
         goto cleanup;
     }
@@ -301,11 +296,11 @@ mymain(void)
     int ret = 0;
     struct testInfo info;
 
-    if ((driver.caps = testQemuCapsInit()) == NULL)
+    if (qemuTestDriverInit(&driver) < 0)
         return EXIT_FAILURE;
 
-    if (!(driver.xmlopt = virQEMUDriverCreateXMLConf(&driver)))
-        return EXIT_FAILURE;
+    /* TODO: test with format probing disabled too */
+    driver.config->allowDiskFormatProbing = true;
 
 # define DO_TEST_FULL(name, is_different, when)                                \
     do {                                                                       \
@@ -403,9 +398,6 @@ mymain(void)
     DO_TEST("floppy-drive-fat");
     DO_TEST("disk-drive-fat");
     DO_TEST("disk-drive-fmt-qcow");
-    DO_TEST("disk-drive-cache-v1-wt");
-    DO_TEST("disk-drive-cache-v1-wb");
-    DO_TEST("disk-drive-cache-v1-none");
     DO_TEST("disk-drive-copy-on-read");
     DO_TEST("disk-drive-network-nbd");
     DO_TEST("disk-drive-network-nbd-export");
@@ -420,6 +412,7 @@ mymain(void)
     DO_TEST("disk-virtio-scsi-num_queues");
     DO_TEST("disk-virtio-scsi-cmd_per_lun");
     DO_TEST("disk-virtio-scsi-max_sectors");
+    DO_TEST("disk-virtio-scsi-ioeventfd");
     DO_TEST("disk-scsi-megasas");
     DO_TEST_DIFFERENT("disk-mirror-old");
     DO_TEST_FULL("disk-mirror", false, WHEN_ACTIVE);
@@ -492,6 +485,7 @@ mymain(void)
     DO_TEST("cputune");
     DO_TEST("cputune-zero-shares");
     DO_TEST_DIFFERENT("cputune-iothreadsched");
+    DO_TEST("cputune-iothreadsched-zeropriority");
     DO_TEST("cputune-numatune");
     DO_TEST("vcpu-placement-static");
 
@@ -513,6 +507,7 @@ mymain(void)
     DO_TEST_DIFFERENT("usb-redir-filter");
     DO_TEST_DIFFERENT("usb-redir-filter-version");
     DO_TEST("blkdeviotune");
+    DO_TEST_DIFFERENT("controller-usb-order");
 
     DO_TEST_FULL("seclabel-dynamic-baselabel", false, WHEN_INACTIVE);
     DO_TEST_FULL("seclabel-dynamic-override", false, WHEN_INACTIVE);
@@ -566,6 +561,10 @@ mymain(void)
     DO_TEST_DIFFERENT("pci-autoadd-idx");
     DO_TEST_DIFFERENT("pcie-root");
     DO_TEST_DIFFERENT("q35");
+    DO_TEST("pcie-root-port");
+    DO_TEST("pcie-root-port-too-many");
+    DO_TEST("pcie-switch-upstream-port");
+    DO_TEST("pcie-switch-downstream-port");
 
     DO_TEST("hostdev-scsi-lsi");
     DO_TEST("hostdev-scsi-virtio-scsi");
@@ -577,6 +576,7 @@ mymain(void)
     DO_TEST("hostdev-scsi-rawio");
 
     DO_TEST_DIFFERENT("hostdev-scsi-autogen-address");
+    DO_TEST("hostdev-scsi-large-unit");
 
     DO_TEST("hostdev-scsi-lsi-iscsi");
     DO_TEST("hostdev-scsi-lsi-iscsi-auth");
@@ -600,6 +600,7 @@ mymain(void)
     DO_TEST_DIFFERENT("cpu-numa1");
     DO_TEST_DIFFERENT("cpu-numa2");
     DO_TEST_DIFFERENT("cpu-numa-no-memory-element");
+    DO_TEST_DIFFERENT("cpu-numa-disordered");
     DO_TEST("cpu-numa-disjoint");
     DO_TEST("cpu-numa-memshared");
 
@@ -614,14 +615,18 @@ mymain(void)
     DO_TEST_DIFFERENT("tap-vhost-incorrect");
     DO_TEST("shmem");
     DO_TEST("smbios");
+    DO_TEST("smbios-multiple-type2");
     DO_TEST("aarch64-aavmf-virtio-mmio");
+
+    DO_TEST("aarch64-gic");
+    DO_TEST("aarch64-gicv3");
 
     DO_TEST("memory-hotplug");
     DO_TEST("memory-hotplug-nonuma");
     DO_TEST("memory-hotplug-dimm");
+    DO_TEST("net-udp");
 
-    virObjectUnref(driver.caps);
-    virObjectUnref(driver.xmlopt);
+    qemuTestDriverFree(&driver);
 
     return ret == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

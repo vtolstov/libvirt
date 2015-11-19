@@ -78,77 +78,61 @@ vzDriverUnlock(vzConnPtr driver)
     virMutexUnlock(&driver->lock);
 }
 
+static int
+vzCapsAddGuestDomain(virCapsPtr caps,
+                     virDomainOSType ostype,
+                     virArch arch,
+                     const char * emulator,
+                     virDomainVirtType virt_type)
+{
+    virCapsGuestPtr guest;
+
+    if ((guest = virCapabilitiesAddGuest(caps, ostype, arch, emulator,
+                                         NULL, 0, NULL)) == NULL)
+        return -1;
+
+
+    if (virCapabilitiesAddGuestDomain(guest, virt_type,
+                                      NULL, NULL, 0, NULL) == NULL)
+        return -1;
+
+    return 0;
+}
+
 static virCapsPtr
 vzBuildCapabilities(void)
 {
     virCapsPtr caps = NULL;
     virCPUDefPtr cpu = NULL;
     virCPUDataPtr data = NULL;
-    virCapsGuestPtr guest;
     virNodeInfo nodeinfo;
+    virDomainOSType ostypes[] = {
+        VIR_DOMAIN_OSTYPE_HVM,
+        VIR_DOMAIN_OSTYPE_EXE
+    };
+    virArch archs[] = { VIR_ARCH_I686, VIR_ARCH_X86_64 };
+    const char *const emulators[] = { "parallels", "vz" };
+    virDomainVirtType virt_types[] = {
+        VIR_DOMAIN_VIRT_PARALLELS,
+        VIR_DOMAIN_VIRT_VZ
+    };
+    size_t i, j, k;
 
     if ((caps = virCapabilitiesNew(virArchFromHost(),
                                    false, false)) == NULL)
         return NULL;
 
-    if (nodeCapsInitNUMA(caps) < 0)
+    if (nodeCapsInitNUMA(NULL, caps) < 0)
         goto error;
 
-    if ((guest = virCapabilitiesAddGuest(caps, VIR_DOMAIN_OSTYPE_HVM,
-                                         VIR_ARCH_X86_64,
-                                         "parallels",
-                                         NULL, 0, NULL)) == NULL)
-        goto error;
+    for (i = 0; i < 2; i++)
+        for (j = 0; j < 2; j++)
+            for (k = 0; k < 2; k++)
+                if (vzCapsAddGuestDomain(caps, ostypes[i], archs[j],
+                                         emulators[k], virt_types[k]) < 0)
+                    goto error;
 
-    if ((guest = virCapabilitiesAddGuest(caps, VIR_DOMAIN_OSTYPE_HVM,
-                                         VIR_ARCH_I686,
-                                         "parallels",
-                                         NULL, 0, NULL)) == NULL)
-        goto error;
-
-
-    if (virCapabilitiesAddGuestDomain(guest, VIR_DOMAIN_VIRT_PARALLELS,
-                                      NULL, NULL, 0, NULL) == NULL)
-        goto error;
-
-    if ((guest = virCapabilitiesAddGuest(caps, VIR_DOMAIN_OSTYPE_EXE,
-                                         VIR_ARCH_X86_64,
-                                         "parallels",
-                                         NULL, 0, NULL)) == NULL)
-        goto error;
-
-    if (virCapabilitiesAddGuestDomain(guest, VIR_DOMAIN_VIRT_PARALLELS,
-                                      NULL, NULL, 0, NULL) == NULL)
-        goto error;
-
-    if ((guest = virCapabilitiesAddGuest(caps, VIR_DOMAIN_OSTYPE_HVM,
-                                         VIR_ARCH_X86_64,
-                                         "vz",
-                                         NULL, 0, NULL)) == NULL)
-        goto error;
-
-    if ((guest = virCapabilitiesAddGuest(caps, VIR_DOMAIN_OSTYPE_HVM,
-                                         VIR_ARCH_I686,
-                                         "vz",
-                                         NULL, 0, NULL)) == NULL)
-        goto error;
-
-
-    if (virCapabilitiesAddGuestDomain(guest, VIR_DOMAIN_VIRT_VZ,
-                                      NULL, NULL, 0, NULL) == NULL)
-        goto error;
-
-    if ((guest = virCapabilitiesAddGuest(caps, VIR_DOMAIN_OSTYPE_EXE,
-                                         VIR_ARCH_X86_64,
-                                         "vz",
-                                         NULL, 0, NULL)) == NULL)
-        goto error;
-
-    if (virCapabilitiesAddGuestDomain(guest, VIR_DOMAIN_VIRT_VZ,
-                                      NULL, NULL, 0, NULL) == NULL)
-        goto error;
-
-    if (nodeGetInfo(&nodeinfo))
+    if (nodeGetInfo(NULL, &nodeinfo))
         goto error;
 
     if (VIR_ALLOC(cpu) < 0)
@@ -190,8 +174,8 @@ vzConnectGetCapabilities(virConnectPtr conn)
 
 static int
 vzDomainDefPostParse(virDomainDefPtr def,
-                            virCapsPtr caps ATTRIBUTE_UNUSED,
-                            void *opaque ATTRIBUTE_UNUSED)
+                     virCapsPtr caps ATTRIBUTE_UNUSED,
+                     void *opaque ATTRIBUTE_UNUSED)
 {
     /* memory hotplug tunables are not supported by this driver */
     if (virDomainDefCheckUnsupportedMemoryHotplug(def) < 0)
@@ -202,9 +186,9 @@ vzDomainDefPostParse(virDomainDefPtr def,
 
 static int
 vzDomainDeviceDefPostParse(virDomainDeviceDefPtr dev,
-                                  const virDomainDef *def,
-                                  virCapsPtr caps ATTRIBUTE_UNUSED,
-                                  void *opaque ATTRIBUTE_UNUSED)
+                           const virDomainDef *def,
+                           virCapsPtr caps ATTRIBUTE_UNUSED,
+                           void *opaque ATTRIBUTE_UNUSED)
 {
     int ret = -1;
 
@@ -256,7 +240,7 @@ vzOpenDefault(virConnectPtr conn)
         goto error;
 
     if (!(privconn->xmlopt = virDomainXMLOptionNew(&vzDomainDefParserConfig,
-                                                 NULL, NULL)))
+                                                   NULL, NULL)))
         goto error;
 
     if (!(privconn->domains = virDomainObjListNew()))
@@ -278,7 +262,6 @@ vzOpenDefault(virConnectPtr conn)
  error:
     virObjectUnref(privconn->domains);
     virObjectUnref(privconn->caps);
-    virStoragePoolObjListFree(&privconn->pools);
     virObjectEventStateFree(privconn->domainEventState);
     prlsdkDisconnect(privconn);
     prlsdkDeinit();
@@ -289,8 +272,8 @@ vzOpenDefault(virConnectPtr conn)
 
 static virDrvOpenStatus
 vzConnectOpen(virConnectPtr conn,
-                     virConnectAuthPtr auth ATTRIBUTE_UNUSED,
-                     unsigned int flags)
+              virConnectAuthPtr auth ATTRIBUTE_UNUSED,
+              unsigned int flags)
 {
     int ret;
 
@@ -317,16 +300,14 @@ vzConnectOpen(virConnectPtr conn,
         return VIR_DRV_OPEN_DECLINED;
 
     /* From this point on, the connection is for us. */
-    if (!STREQ_NULLABLE(conn->uri->path, "/system")) {
+    if (STRNEQ_NULLABLE(conn->uri->path, "/system")) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Unexpected Virtuozzo URI path '%s', try vz:///system"),
                        conn->uri->path);
         return VIR_DRV_OPEN_ERROR;
     }
 
-    if ((ret = vzOpenDefault(conn)) != VIR_DRV_OPEN_SUCCESS ||
-        (ret = vzStorageOpen(conn, flags)) != VIR_DRV_OPEN_SUCCESS ||
-        (ret = vzNetworkOpen(conn, flags)) != VIR_DRV_OPEN_SUCCESS) {
+    if ((ret = vzOpenDefault(conn)) != VIR_DRV_OPEN_SUCCESS) {
         vzConnectClose(conn);
         return ret;
     }
@@ -341,9 +322,6 @@ vzConnectClose(virConnectPtr conn)
 
     if (!privconn)
         return 0;
-
-    vzNetworkClose(conn);
-    vzStorageClose(conn);
 
     vzDriverLock(privconn);
     prlsdkUnsubscribeFromPCSEvents(privconn);
@@ -474,8 +452,8 @@ vzConnectNumOfDefinedDomains(virConnectPtr conn)
 
 static int
 vzConnectListAllDomains(virConnectPtr conn,
-                               virDomainPtr **domains,
-                               unsigned int flags)
+                        virDomainPtr **domains,
+                        unsigned int flags)
 {
     vzConnPtr privconn = conn->privateData;
     int ret = -1;
@@ -576,7 +554,7 @@ vzDomainGetInfo(virDomainPtr domain, virDomainInfoPtr info)
     virDomainObjPtr privdom;
     int ret = -1;
 
-    if (!(privdom = vzDomObjFromDomain(domain)))
+    if (!(privdom = vzDomObjFromDomainRef(domain)))
         goto cleanup;
 
     info->state = virDomainObjGetState(privdom, NULL);
@@ -584,11 +562,24 @@ vzDomainGetInfo(virDomainPtr domain, virDomainInfoPtr info)
     info->maxMem = virDomainDefGetMemoryActual(privdom->def);
     info->nrVirtCpu = privdom->def->vcpus;
     info->cpuTime = 0;
+
+    if (virDomainObjIsActive(privdom)) {
+        unsigned long long vtime;
+        size_t i;
+
+        for (i = 0; i < privdom->def->vcpus; ++i) {
+            if (prlsdkGetVcpuStats(privdom, i, &vtime) < 0) {
+                virReportError(VIR_ERR_OPERATION_FAILED, "%s",
+                               _("cannot read cputime for domain"));
+                goto cleanup;
+            }
+            info->cpuTime += vtime;
+        }
+    }
     ret = 0;
 
  cleanup:
-    if (privdom)
-        virObjectUnlock(privdom);
+    virDomainObjEndAPI(&privdom);
     return ret;
 }
 
@@ -629,7 +620,7 @@ vzDomainIsPersistent(virDomainPtr domain)
 
 static int
 vzDomainGetState(virDomainPtr domain,
-                  int *state, int *reason, unsigned int flags)
+                 int *state, int *reason, unsigned int flags)
 {
     virDomainObjPtr privdom;
     int ret = -1;
@@ -779,9 +770,9 @@ vzDomainDefineXML(virConnectPtr conn, const char *xml)
 
 static int
 vzNodeGetInfo(virConnectPtr conn ATTRIBUTE_UNUSED,
-                     virNodeInfoPtr nodeinfo)
+              virNodeInfoPtr nodeinfo)
 {
-    return nodeGetInfo(nodeinfo);
+    return nodeGetInfo(NULL, nodeinfo);
 }
 
 static int vzConnectIsEncrypted(virConnectPtr conn ATTRIBUTE_UNUSED)
@@ -804,9 +795,9 @@ static int vzConnectIsAlive(virConnectPtr conn ATTRIBUTE_UNUSED)
 
 static char *
 vzConnectBaselineCPU(virConnectPtr conn ATTRIBUTE_UNUSED,
-                            const char **xmlCPUs,
-                            unsigned int ncpus,
-                            unsigned int flags)
+                     const char **xmlCPUs,
+                     unsigned int ncpus,
+                     unsigned int flags)
 {
     virCheckFlags(VIR_CONNECT_BASELINE_CPU_EXPAND_FEATURES, NULL);
 
@@ -816,17 +807,16 @@ vzConnectBaselineCPU(virConnectPtr conn ATTRIBUTE_UNUSED,
 
 static int
 vzDomainGetVcpus(virDomainPtr domain,
-                        virVcpuInfoPtr info,
-                        int maxinfo,
-                        unsigned char *cpumaps,
-                        int maplen)
+                 virVcpuInfoPtr info,
+                 int maxinfo,
+                 unsigned char *cpumaps,
+                 int maplen)
 {
     virDomainObjPtr privdom = NULL;
     size_t i;
-    int v, maxcpu, hostcpus;
     int ret = -1;
 
-    if (!(privdom = vzDomObjFromDomain(domain)))
+    if (!(privdom = vzDomObjFromDomainRef(domain)))
         goto cleanup;
 
     if (!virDomainObjIsActive(privdom)) {
@@ -836,62 +826,49 @@ vzDomainGetVcpus(virDomainPtr domain,
         goto cleanup;
     }
 
-    if ((hostcpus = nodeGetCPUCount()) < 0)
-        goto cleanup;
-
-    maxcpu = maplen * 8;
-    if (maxcpu > hostcpus)
-        maxcpu = hostcpus;
-
     if (maxinfo >= 1) {
         if (info != NULL) {
             memset(info, 0, sizeof(*info) * maxinfo);
             for (i = 0; i < maxinfo; i++) {
                 info[i].number = i;
                 info[i].state = VIR_VCPU_RUNNING;
+                if (prlsdkGetVcpuStats(privdom, i, &info[i].cpuTime) < 0)
+                    goto cleanup;
             }
         }
         if (cpumaps != NULL) {
-            unsigned char *tmpmap = NULL;
-            int tmpmapLen = 0;
-
             memset(cpumaps, 0, maplen * maxinfo);
-            virBitmapToData(privdom->def->cpumask, &tmpmap, &tmpmapLen);
-            if (tmpmapLen > maplen)
-                tmpmapLen = maplen;
-
-            for (v = 0; v < maxinfo; v++) {
-                unsigned char *cpumap = VIR_GET_CPUMAP(cpumaps, maplen, v);
-                memcpy(cpumap, tmpmap, tmpmapLen);
-            }
-            VIR_FREE(tmpmap);
+            for (i = 0; i < maxinfo; i++)
+                virBitmapToDataBuf(privdom->def->cpumask,
+                                   VIR_GET_CPUMAP(cpumaps, maplen, i),
+                                   maplen);
         }
     }
     ret = maxinfo;
 
  cleanup:
     if (privdom)
-        virObjectUnlock(privdom);
+        virDomainObjEndAPI(&privdom);
     return ret;
 }
 
 
 static int
 vzNodeGetCPUMap(virConnectPtr conn ATTRIBUTE_UNUSED,
-                       unsigned char **cpumap,
-                       unsigned int *online,
-                       unsigned int flags)
+                unsigned char **cpumap,
+                unsigned int *online,
+                unsigned int flags)
 {
-    return nodeGetCPUMap(cpumap, online, flags);
+    return nodeGetCPUMap(NULL, cpumap, online, flags);
 }
 
 static int
 vzConnectDomainEventRegisterAny(virConnectPtr conn,
-                                       virDomainPtr domain,
-                                       int eventID,
-                                       virConnectDomainEventGenericCallback callback,
-                                       void *opaque,
-                                       virFreeCallback freecb)
+                                virDomainPtr domain,
+                                int eventID,
+                                virConnectDomainEventGenericCallback callback,
+                                void *opaque,
+                                virFreeCallback freecb)
 {
     int ret = -1;
     vzConnPtr privconn = conn->privateData;
@@ -905,7 +882,7 @@ vzConnectDomainEventRegisterAny(virConnectPtr conn,
 
 static int
 vzConnectDomainEventDeregisterAny(virConnectPtr conn,
-                                         int callbackID)
+                                  int callbackID)
 {
     vzConnPtr privconn = conn->privateData;
     int ret = -1;
@@ -971,7 +948,7 @@ vzDomainCreateWithFlags(virDomainPtr domain, unsigned int flags)
 
 static int
 vzDomainUndefineFlags(virDomainPtr domain,
-                             unsigned int flags)
+                      unsigned int flags)
 {
     vzConnPtr privconn = domain->conn->privateData;
     virDomainObjPtr dom = NULL;
@@ -984,7 +961,7 @@ vzDomainUndefineFlags(virDomainPtr domain,
 
     ret = prlsdkUnregisterDomain(privconn, dom);
     if (ret)
-         virObjectUnlock(dom);
+        virObjectUnlock(dom);
 
     return ret;
 }
@@ -1069,7 +1046,7 @@ vzDomainManagedSaveRemove(virDomainPtr domain, unsigned int flags)
 }
 
 static int vzDomainAttachDeviceFlags(virDomainPtr dom, const char *xml,
-                                            unsigned int flags)
+                                     unsigned int flags)
 {
     int ret = -1;
     vzConnPtr privconn = dom->conn->privateData;
@@ -1117,6 +1094,14 @@ static int vzDomainAttachDeviceFlags(virDomainPtr dom, const char *xml,
             goto cleanup;
         }
         break;
+    case VIR_DOMAIN_DEVICE_NET:
+        ret = prlsdkAttachNet(privdom, privconn, dev->data.net);
+        if (ret) {
+            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                           _("network attach failed"));
+            goto cleanup;
+        }
+        break;
     default:
         virReportError(VIR_ERR_OPERATION_UNSUPPORTED,
                        _("device type '%s' cannot be attached"),
@@ -1133,11 +1118,11 @@ static int vzDomainAttachDeviceFlags(virDomainPtr dom, const char *xml,
 static int vzDomainAttachDevice(virDomainPtr dom, const char *xml)
 {
     return vzDomainAttachDeviceFlags(dom, xml,
-                                            VIR_DOMAIN_AFFECT_CONFIG | VIR_DOMAIN_AFFECT_LIVE);
+                                     VIR_DOMAIN_AFFECT_CONFIG | VIR_DOMAIN_AFFECT_LIVE);
 }
 
 static int vzDomainDetachDeviceFlags(virDomainPtr dom, const char *xml,
-                                            unsigned int flags)
+                                     unsigned int flags)
 {
     int ret = -1;
     vzConnPtr privconn = dom->conn->privateData;
@@ -1186,6 +1171,14 @@ static int vzDomainDetachDeviceFlags(virDomainPtr dom, const char *xml,
             goto cleanup;
         }
         break;
+    case VIR_DOMAIN_DEVICE_NET:
+        ret = prlsdkDetachNet(privdom, privconn, dev->data.net);
+        if (ret) {
+            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                           _("network detach failed"));
+            goto cleanup;
+        }
+        break;
     default:
         virReportError(VIR_ERR_OPERATION_UNSUPPORTED,
                        _("device type '%s' cannot be detached"),
@@ -1202,7 +1195,7 @@ static int vzDomainDetachDeviceFlags(virDomainPtr dom, const char *xml,
 static int vzDomainDetachDevice(virDomainPtr dom, const char *xml)
 {
     return vzDomainDetachDeviceFlags(dom, xml,
-                                            VIR_DOMAIN_AFFECT_CONFIG | VIR_DOMAIN_AFFECT_LIVE);
+                                     VIR_DOMAIN_AFFECT_CONFIG | VIR_DOMAIN_AFFECT_LIVE);
 }
 
 static unsigned long long
@@ -1214,14 +1207,14 @@ vzDomainGetMaxMemory(virDomainPtr domain)
     if (!(dom = vzDomObjFromDomain(domain)))
         return -1;
 
-    ret = dom->def->mem.max_balloon;
+    ret = virDomainDefGetMemoryActual(dom->def);
     virObjectUnlock(dom);
     return ret;
 }
 
 static int
 vzDomainBlockStats(virDomainPtr domain, const char *path,
-                     virDomainBlockStatsPtr stats)
+                   virDomainBlockStatsPtr stats)
 {
     virDomainObjPtr dom = NULL;
     int ret = -1;
@@ -1241,7 +1234,7 @@ vzDomainBlockStats(virDomainPtr domain, const char *path,
     } else {
         virDomainBlockStatsStruct s;
 
-#define PARALLELS_ZERO_STATS(VAR, TYPE, NAME)           \
+#define PARALLELS_ZERO_STATS(VAR, TYPE, NAME)      \
         stats->VAR = 0;
 
         PARALLELS_BLOCK_STATS_FOREACH(PARALLELS_ZERO_STATS)
@@ -1253,10 +1246,10 @@ vzDomainBlockStats(virDomainPtr domain, const char *path,
                 goto cleanup;
 
 #define PARALLELS_SUM_STATS(VAR, TYPE, NAME)        \
-        if (s.VAR != -1)                            \
-           stats->VAR += s.VAR;
+    if (s.VAR != -1)                                \
+        stats->VAR += s.VAR;
 
-            PARALLELS_BLOCK_STATS_FOREACH(PARALLELS_SUM_STATS)
+        PARALLELS_BLOCK_STATS_FOREACH(PARALLELS_SUM_STATS)
 
 #undef PARALLELS_SUM_STATS
         }
@@ -1273,10 +1266,10 @@ vzDomainBlockStats(virDomainPtr domain, const char *path,
 
 static int
 vzDomainBlockStatsFlags(virDomainPtr domain,
-                          const char *path,
-                          virTypedParameterPtr params,
-                          int *nparams,
-                          unsigned int flags)
+                        const char *path,
+                        virTypedParameterPtr params,
+                        int *nparams,
+                        unsigned int flags)
 {
     virDomainBlockStatsStruct stats;
     int ret = -1;
@@ -1321,6 +1314,142 @@ vzDomainBlockStatsFlags(virDomainPtr domain,
     return ret;
 }
 
+static int
+vzDomainInterfaceStats(virDomainPtr domain,
+                         const char *path,
+                         virDomainInterfaceStatsPtr stats)
+{
+    virDomainObjPtr dom = NULL;
+    int ret;
+
+    if (!(dom = vzDomObjFromDomainRef(domain)))
+        return -1;
+
+    ret = prlsdkGetNetStats(dom, path, stats);
+    virDomainObjEndAPI(&dom);
+
+    return ret;
+}
+
+static int
+vzDomainMemoryStats(virDomainPtr domain,
+                    virDomainMemoryStatPtr stats,
+                    unsigned int nr_stats,
+                    unsigned int flags)
+{
+    virDomainObjPtr dom = NULL;
+    int ret = -1;
+
+    virCheckFlags(0, -1);
+    if (!(dom = vzDomObjFromDomainRef(domain)))
+        return -1;
+
+    ret = prlsdkGetMemoryStats(dom, stats, nr_stats);
+    virDomainObjEndAPI(&dom);
+
+    return ret;
+}
+
+static int
+vzDomainGetVcpusFlags(virDomainPtr dom,
+                      unsigned int flags)
+{
+    virDomainObjPtr privdom = NULL;
+    int ret = -1;
+
+    virCheckFlags(VIR_DOMAIN_AFFECT_LIVE |
+                  VIR_DOMAIN_AFFECT_CONFIG |
+                  VIR_DOMAIN_VCPU_MAXIMUM, -1);
+
+    if (!(privdom = vzDomObjFromDomain(dom)))
+        goto cleanup;
+
+    if (flags & VIR_DOMAIN_VCPU_MAXIMUM)
+        ret = privdom->def->maxvcpus;
+    else
+        ret = privdom->def->vcpus;
+
+ cleanup:
+    if (privdom)
+        virObjectUnlock(privdom);
+
+    return ret;
+}
+
+static int vzDomainGetMaxVcpus(virDomainPtr dom)
+{
+    return vzDomainGetVcpusFlags(dom, (VIR_DOMAIN_AFFECT_LIVE |
+                                       VIR_DOMAIN_VCPU_MAXIMUM));
+}
+
+static int vzDomainIsUpdated(virDomainPtr dom)
+{
+    virDomainObjPtr privdom;
+    int ret = -1;
+
+    /* As far as VZ domains are always updated (e.g. current==persistent),
+     * we just check for domain existence */
+    if (!(privdom = vzDomObjFromDomain(dom)))
+        goto cleanup;
+
+    ret = 0;
+
+ cleanup:
+    if (privdom)
+        virObjectUnlock(privdom);
+    return ret;
+}
+
+static int vzConnectGetMaxVcpus(virConnectPtr conn ATTRIBUTE_UNUSED,
+                                const char *type)
+{
+    /* As far as we have no limitation for containers
+     * we report maximum */
+    if (type == NULL || STRCASEEQ(type, "vz") || STRCASEEQ(type, "parallels"))
+        return 1028;
+
+    virReportError(VIR_ERR_INVALID_ARG,
+                   _("unknown type '%s'"), type);
+    return -1;
+}
+
+static int
+vzNodeGetCPUStats(virConnectPtr conn ATTRIBUTE_UNUSED,
+                  int cpuNum,
+                  virNodeCPUStatsPtr params,
+                  int *nparams,
+                  unsigned int flags)
+{
+    return nodeGetCPUStats(cpuNum, params, nparams, flags);
+}
+
+static int
+vzNodeGetMemoryStats(virConnectPtr conn ATTRIBUTE_UNUSED,
+                     int cellNum,
+                     virNodeMemoryStatsPtr params,
+                     int *nparams,
+                     unsigned int flags)
+{
+    return nodeGetMemoryStats(NULL, cellNum, params, nparams, flags);
+}
+
+static int
+vzNodeGetCellsFreeMemory(virConnectPtr conn ATTRIBUTE_UNUSED,
+                         unsigned long long *freeMems,
+                         int startCell,
+                         int maxCells)
+{
+    return nodeGetCellsFreeMemory(freeMems, startCell, maxCells);
+}
+
+static unsigned long long
+vzNodeGetFreeMemory(virConnectPtr conn ATTRIBUTE_UNUSED)
+{
+    unsigned long long freeMem;
+    if (nodeGetMemory(NULL, &freeMem) < 0)
+        return 0;
+    return freeMem;
+}
 
 static virHypervisorDriver vzDriver = {
     .name = "vz",
@@ -1328,7 +1457,12 @@ static virHypervisorDriver vzDriver = {
     .connectClose = vzConnectClose,          /* 0.10.0 */
     .connectGetVersion = vzConnectGetVersion,   /* 0.10.0 */
     .connectGetHostname = vzConnectGetHostname,      /* 0.10.0 */
+    .connectGetMaxVcpus = vzConnectGetMaxVcpus, /* 1.2.21 */
     .nodeGetInfo = vzNodeGetInfo,      /* 0.10.0 */
+    .nodeGetCPUStats = vzNodeGetCPUStats,      /* 1.2.21 */
+    .nodeGetMemoryStats = vzNodeGetMemoryStats, /* 1.2.21 */
+    .nodeGetCellsFreeMemory = vzNodeGetCellsFreeMemory, /* 1.2.21 */
+    .nodeGetFreeMemory = vzNodeGetFreeMemory, /* 1.2.21 */
     .connectGetCapabilities = vzConnectGetCapabilities,      /* 0.10.0 */
     .connectBaselineCPU = vzConnectBaselineCPU, /* 1.2.6 */
     .connectListDomains = vzConnectListDomains,      /* 0.10.0 */
@@ -1361,6 +1495,9 @@ static virHypervisorDriver vzDriver = {
     .domainDetachDevice = vzDomainDetachDevice, /* 1.2.15 */
     .domainDetachDeviceFlags = vzDomainDetachDeviceFlags, /* 1.2.15 */
     .domainIsActive = vzDomainIsActive, /* 1.2.10 */
+    .domainIsUpdated = vzDomainIsUpdated,     /* 1.2.21 */
+    .domainGetVcpusFlags = vzDomainGetVcpusFlags, /* 1.2.21 */
+    .domainGetMaxVcpus = vzDomainGetMaxVcpus, /* 1.2.21 */
     .connectDomainEventRegisterAny = vzConnectDomainEventRegisterAny, /* 1.2.10 */
     .connectDomainEventDeregisterAny = vzConnectDomainEventDeregisterAny, /* 1.2.10 */
     .nodeGetCPUMap = vzNodeGetCPUMap, /* 1.2.8 */
@@ -1371,14 +1508,14 @@ static virHypervisorDriver vzDriver = {
     .domainManagedSave = vzDomainManagedSave, /* 1.2.14 */
     .domainManagedSaveRemove = vzDomainManagedSaveRemove, /* 1.2.14 */
     .domainGetMaxMemory = vzDomainGetMaxMemory, /* 1.2.15 */
-    .domainBlockStats = vzDomainBlockStats, /* 1.3.0 */
-    .domainBlockStatsFlags = vzDomainBlockStatsFlags, /* 1.3.0 */
+    .domainBlockStats = vzDomainBlockStats, /* 1.2.17 */
+    .domainBlockStatsFlags = vzDomainBlockStatsFlags, /* 1.2.17 */
+    .domainInterfaceStats = vzDomainInterfaceStats, /* 1.2.17 */
+    .domainMemoryStats = vzDomainMemoryStats, /* 1.2.17 */
 };
 
 static virConnectDriver vzConnectDriver = {
     .hypervisorDriver = &vzDriver,
-    .storageDriver = &vzStorageDriver,
-    .networkDriver = &vzNetworkDriver,
 };
 
 /* Parallels domain type backward compatibility*/

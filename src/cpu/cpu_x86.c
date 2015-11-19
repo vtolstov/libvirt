@@ -1371,6 +1371,12 @@ x86Compute(virCPUDefPtr host,
     virArch arch;
     size_t i;
 
+    if (!cpu->model) {
+        virReportError(VIR_ERR_INVALID_ARG, "%s",
+                       _("no guest CPU model specified"));
+        return VIR_CPU_COMPARE_ERROR;
+    }
+
     if (cpu->arch != VIR_ARCH_NONE) {
         bool found = false;
 
@@ -1507,14 +1513,14 @@ x86Compute(virCPUDefPtr host,
 static virCPUCompareResult
 x86Compare(virCPUDefPtr host,
            virCPUDefPtr cpu,
-           bool failIncomaptible)
+           bool failIncompatible)
 {
     virCPUCompareResult ret;
     char *message = NULL;
 
     ret = x86Compute(host, cpu, NULL, &message);
 
-    if (failIncomaptible && ret == VIR_CPU_COMPARE_INCOMPATIBLE) {
+    if (failIncompatible && ret == VIR_CPU_COMPARE_INCOMPATIBLE) {
         ret = VIR_CPU_COMPARE_ERROR;
         if (message) {
             virReportError(VIR_ERR_CPU_INCOMPATIBLE, "%s", message);

@@ -197,7 +197,7 @@ bhyveConnectOpen(virConnectPtr conn,
          if (conn->uri->server)
              return VIR_DRV_OPEN_DECLINED;
 
-         if (!STREQ_NULLABLE(conn->uri->path, "/system")) {
+         if (STRNEQ_NULLABLE(conn->uri->path, "/system")) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
                            _("Unexpected bhyve URI path '%s', try bhyve:///system"),
                            conn->uri->path);
@@ -461,6 +461,27 @@ bhyveDomainIsPersistent(virDomainPtr domain)
  cleanup:
     if (obj)
         virObjectUnlock(obj);
+    return ret;
+}
+
+static char *
+bhyveDomainGetOSType(virDomainPtr dom)
+{
+    virDomainObjPtr vm;
+    char *ret = NULL;
+
+    if (!(vm = bhyveDomObjFromDomain(dom)))
+        goto cleanup;
+
+    if (virDomainGetOSTypeEnsureACL(dom->conn, vm->def) < 0)
+        goto cleanup;
+
+    if (VIR_STRDUP(ret, virDomainOSTypeToString(vm->def->os.type)) < 0)
+        goto cleanup;
+
+ cleanup:
+    if (vm)
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -918,6 +939,7 @@ bhyveDomainCreateXML(virConnectPtr conn,
 
     if (!(vm = virDomainObjListAdd(privconn->domains, def,
                                    privconn->xmlopt,
+                                   VIR_DOMAIN_OBJ_LIST_ADD_LIVE |
                                    VIR_DOMAIN_OBJ_LIST_ADD_CHECK_LIVE, NULL)))
         goto cleanup;
     def = NULL;
@@ -1121,7 +1143,7 @@ bhyveNodeGetMemoryStats(virConnectPtr conn,
     if (virNodeGetMemoryStatsEnsureACL(conn) < 0)
         return -1;
 
-    return nodeGetMemoryStats(cellNum, params, nparams, flags);
+    return nodeGetMemoryStats(NULL, cellNum, params, nparams, flags);
 }
 
 static int
@@ -1131,7 +1153,7 @@ bhyveNodeGetInfo(virConnectPtr conn,
     if (virNodeGetInfoEnsureACL(conn) < 0)
         return -1;
 
-    return nodeGetInfo(nodeinfo);
+    return nodeGetInfo(NULL, nodeinfo);
 }
 
 static int
@@ -1179,6 +1201,9 @@ bhyveStateInitialize(bool privileged,
         goto cleanup;
 
     if (!(bhyve_driver->caps = virBhyveCapsBuild()))
+        goto cleanup;
+
+    if (virBhyveProbeCaps(&bhyve_driver->bhyvecaps) < 0)
         goto cleanup;
 
     if (virBhyveProbeGrubCaps(&bhyve_driver->grubcaps) < 0)
@@ -1237,6 +1262,16 @@ bhyveStateInitialize(bool privileged,
     virObjectUnref(conn);
     bhyveStateCleanup();
     return -1;
+}
+
+unsigned
+bhyveDriverGetCaps(virConnectPtr conn)
+{
+    bhyveConnPtr driver = conn->privateData;
+
+    if (driver != NULL)
+        return driver->bhyvecaps;
+    return 0;
 }
 
 unsigned
@@ -1299,7 +1334,7 @@ bhyveNodeGetCPUMap(virConnectPtr conn,
     if (virNodeGetCPUMapEnsureACL(conn) < 0)
         return -1;
 
-    return nodeGetCPUMap(cpumap, online, flags);
+    return nodeGetCPUMap(NULL, cpumap, online, flags);
 }
 
 static int
@@ -1473,6 +1508,7 @@ static virHypervisorDriver bhyveHypervisorDriver = {
     .domainDefineXML = bhyveDomainDefineXML, /* 1.2.2 */
     .domainDefineXMLFlags = bhyveDomainDefineXMLFlags, /* 1.2.12 */
     .domainUndefine = bhyveDomainUndefine, /* 1.2.2 */
+    .domainGetOSType = bhyveDomainGetOSType, /* 1.2.21 */
     .domainGetXMLDesc = bhyveDomainGetXMLDesc, /* 1.2.2 */
     .domainIsActive = bhyveDomainIsActive, /* 1.2.2 */
     .domainIsPersistent = bhyveDomainIsPersistent, /* 1.2.2 */

@@ -65,7 +65,7 @@ virCapsPtr umlCapsInit(void)
      * unexpected failures. We don't want to break the QEMU
      * driver in this scenario, so log errors & carry on
      */
-    if (nodeCapsInitNUMA(caps) < 0) {
+    if (nodeCapsInitNUMA(NULL, caps) < 0) {
         virCapabilitiesFreeNUMAInfo(caps);
         VIR_WARN("Failed to query host NUMA topology, disabling NUMA capabilities");
     }
@@ -193,6 +193,11 @@ umlBuildCommandLineNet(virConnectPtr conn,
     case VIR_DOMAIN_NET_TYPE_CLIENT:
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                        _("TCP client networking type not supported"));
+        goto error;
+
+    case VIR_DOMAIN_NET_TYPE_UDP:
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                       _("UDP networking type not supported"));
         goto error;
 
     case VIR_DOMAIN_NET_TYPE_MCAST:

@@ -16,7 +16,7 @@ dnl You should have received a copy of the GNU Lesser General Public
 dnl License along with this library.  If not, see
 dnl <http://www.gnu.org/licenses/>.
 
-AC_INIT([libvirt], [1.3.0], [libvir-list@redhat.com], [], [http://libvirt.org])
+AC_INIT([libvirt], [1.2.22], [libvir-list@redhat.com], [], [http://libvirt.org])
 AC_CONFIG_SRCDIR([src/libvirt.c])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_HEADERS([config.h])
@@ -123,6 +123,7 @@ PARTED_REQUIRED="1.8.0"
 DEVMAPPER_REQUIRED=1.0.0
 LIBPCAP_REQUIRED="1.0.0"
 LIBNL_REQUIRED="1.1"
+PARALLELS_SDK_REQUIRED="7.0.22"
 
 dnl Checks for C compiler.
 AC_PROG_CC
@@ -389,7 +390,7 @@ AC_CHECK_TYPE([struct ifreq],
   ]])
 
 AC_CHECK_DECLS([ETH_FLAG_TXVLAN, ETH_FLAG_NTUPLE, ETH_FLAG_RXHASH, ETH_FLAG_LRO,
-                ETHTOOL_GGSO, ETHTOOL_GGRO, ETHTOOL_GFLAGS],
+                ETHTOOL_GGSO, ETHTOOL_GGRO, ETHTOOL_GFLAGS, ETHTOOL_GFEATURES],
   [], [], [[#include <linux/ethtool.h>
   ]])
 
@@ -401,7 +402,7 @@ AM_CONDITIONAL([HAVE_LIBTASN1], [test "x$ac_cv_header_libtasn1_h" = "xyes"])
 AC_CHECK_LIB([intl],[gettext],[])
 
 dnl Do we have rpcgen?
-AC_PATH_PROG([RPCGEN], [rpcgen], [no])
+AC_PATH_PROGS([RPCGEN], [rpcgen portable-rpcgen], [no])
 AM_CONDITIONAL([HAVE_RPCGEN], [test "x$ac_cv_path_RPCGEN" != "xno"])
 dnl Is this GLIBC's buggy rpcgen?
 AM_CONDITIONAL([HAVE_GLIBC_RPCGEN],
@@ -562,10 +563,6 @@ AC_ARG_WITH([hyperv],
   [AS_HELP_STRING([--with-hyperv],
     [add Hyper-V support @<:@default=check@:>@])])
 m4_divert_text([DEFAULTS], [with_hyperv=check])
-AC_ARG_WITH([vz],
-  [AS_HELP_STRING([--with-vz],
-    [add Virtuozzo support @<:@default=check@:>@])])
-m4_divert_text([DEFAULTS], [with_vz=check])
 AC_ARG_WITH([test],
   [AS_HELP_STRING([--with-test],
     [add test driver support @<:@default=yes@:>@])])
@@ -1081,23 +1078,7 @@ dnl
 dnl Checks for the Parallels driver
 dnl
 
-
-if test "$with_vz" = "yes" ||
-   test "$with_vz" = "check"; then
-    PKG_CHECK_MODULES([PARALLELS_SDK], [parallels-sdk],
-                      [PARALLELS_SDK_FOUND=yes], [PARALLELS_SDK_FOUND=no])
-
-    if test "$with_vz" = "yes" && test "$PARALLELS_SDK_FOUND" = "no"; then
-        AC_MSG_ERROR([Parallels Virtualization SDK is needed to build the Parallels driver.])
-    fi
-
-    with_vz=$PARALLELS_SDK_FOUND
-    if test "$with_vz" = "yes"; then
-        AC_DEFINE_UNQUOTED([WITH_VZ], 1,
-                           [whether vz driver is enabled])
-    fi
-fi
-AM_CONDITIONAL([WITH_VZ], [test "$with_vz" = "yes"])
+LIBVIRT_DRIVER_CHECK_VZ
 
 dnl
 dnl Checks for bhyve driver
@@ -1358,15 +1339,28 @@ AC_ARG_WITH([polkit],
 with_polkit0=no
 with_polkit1=no
 if test "x$with_polkit" = "xyes" || test "x$with_polkit" = "xcheck"; then
-  dnl Check for new polkit first - just a binary
+  dnl Check for new polkit first. We directly talk over DBus
+  dnl but we use existence of pkcheck binary as a sign that
+  dnl we should prefer polkit-1 over polkit-0, so we check
+  dnl for it even though we don't ultimately use it
   AC_PATH_PROG([PKCHECK_PATH],[pkcheck], [], [/usr/sbin:$PATH])
   if test "x$PKCHECK_PATH" != "x" ; then
-    AC_DEFINE_UNQUOTED([WITH_POLKIT], 1,
-        [use PolicyKit for UNIX socket access checks])
-    AC_DEFINE_UNQUOTED([WITH_POLKIT1], 1,
-        [use PolicyKit for UNIX socket access checks])
-    with_polkit="yes"
-    with_polkit1="yes"
+    dnl Found pkcheck, so ensure dbus-devel is present
+    if test "x$with_dbus" = "xyes" ; then
+      AC_DEFINE_UNQUOTED([WITH_POLKIT], 1,
+          [use PolicyKit for UNIX socket access checks])
+      AC_DEFINE_UNQUOTED([WITH_POLKIT1], 1,
+          [use PolicyKit for UNIX socket access checks])
+      with_polkit="yes"
+      with_polkit1="yes"
+    else
+      if test "x$with_polkit" = "xcheck" ; then
+        with_polkit=no
+      else
+         AC_MSG_ERROR(
+           [You must install dbus to compile libvirt with polkit-1])
+      fi
+    fi
   else
     dnl Check for old polkit second - library + binary
     PKG_CHECK_MODULES(POLKIT, polkit-dbus >= $POLKIT_REQUIRED,
@@ -1676,10 +1670,6 @@ if test "$with_pm_utils" = "yes"; then
 fi
 AM_CONDITIONAL([WITH_PM_UTILS], [test "$with_pm_utils" = "yes"])
 
-dnl virsh libraries
-VIRSH_LIBS="$VIRSH_LIBS $READLINE_LIBS"
-AC_SUBST([VIRSH_LIBS])
-
 dnl check if the network driver should be compiled
 
 AC_ARG_WITH([network],
@@ -1959,14 +1949,14 @@ AC_SUBST([LIBRBD_LIBS])
 
 if test "$with_storage_sheepdog" = "yes" ||
    test "$with_storage_sheepdog" = "check"; then
-  AC_PATH_PROG([COLLIE], [collie], [], [$PATH:/sbin:/usr/sbin])
+  AC_PATH_PROGS([SHEEPDOGCLI], [collie dog], [], [$PATH:/sbin:/usr/sbin])
 
   if test "$with_storage_sheepdog" = "yes"; then
-    if test -z "$COLLIE"; then
-      AC_MSG_ERROR([We need collie for Sheepdog storage driver])
+    if test -z "$SHEEPDOGCLI"; then
+      AC_MSG_ERROR([We need sheepdog client for Sheepdog storage driver])
     fi
   else
-    if test -z "$COLLIE"; then
+    if test -z "$SHEEPDOGCLI"; then
       with_storage_sheepdog=no
     fi
 
@@ -1978,7 +1968,7 @@ if test "$with_storage_sheepdog" = "yes" ||
   if test "$with_storage_sheepdog" = "yes"; then
     AC_DEFINE_UNQUOTED([WITH_STORAGE_SHEEPDOG], 1,
       [whether Sheepdog backend for storage driver is enabled])
-    AC_DEFINE_UNQUOTED([COLLIE],["$COLLIE"],[Location of collie program])
+    AC_DEFINE_UNQUOTED([SHEEPDOGCLI],["$SHEEPDOGCLI"],[Location of sheepdog client program])
   fi
 fi
 AM_CONDITIONAL([WITH_STORAGE_SHEEPDOG],
@@ -2352,7 +2342,7 @@ WIN32_EXTRA_CFLAGS=
 dnl libvirt.syms is generated in builddir, but libvirt_qemu.syms is in git;
 dnl hence the asymmetric naming of these two symbol files.
 LIBVIRT_SYMBOL_FILE=libvirt.syms
-LIBVIRT_ADMIN_SYMBOL_FILE='$(srcdir)/libvirt_admin.syms'
+LIBVIRT_ADMIN_SYMBOL_FILE=libvirt_admin.syms
 LIBVIRT_LXC_SYMBOL_FILE='$(srcdir)/libvirt_lxc.syms'
 LIBVIRT_QEMU_SYMBOL_FILE='$(srcdir)/libvirt_qemu.syms'
 MSCOM_LIBS=
@@ -2529,6 +2519,9 @@ AC_ARG_WITH([qemu-group],
 AC_DEFINE_UNQUOTED([QEMU_USER], ["$QEMU_USER"], [QEMU user account])
 AC_DEFINE_UNQUOTED([QEMU_GROUP], ["$QEMU_GROUP"], [QEMU group account])
 
+AC_PATH_PROG([QEMU_BRIDGE_HELPER], [qemu-bridge-helper], [/usr/libexec/qemu-bridge-helper],
+                  [/usr/libexec:/usr/lib/qemu:/usr/lib])
+AC_DEFINE_UNQUOTED([QEMU_BRIDGE_HELPER], ["$QEMU_BRIDGE_HELPER"], [QEMU bridge helper])
 
 AC_ARG_WITH([macvtap],
   [AS_HELP_STRING([--with-macvtap],
@@ -2808,9 +2801,11 @@ AC_CONFIG_FILES([\
         examples/domtop/Makefile \
         examples/openauth/Makefile \
         examples/hellolibvirt/Makefile \
+        examples/rename/Makefile \
         examples/systemtap/Makefile \
         examples/xml/nwfilter/Makefile \
         examples/lxcconvert/Makefile \
+        examples/polkit/Makefile \
         tools/wireshark/Makefile \
         tools/wireshark/src/Makefile])
 AC_OUTPUT
@@ -2833,7 +2828,7 @@ AC_MSG_NOTICE([      LXC: $with_lxc])
 AC_MSG_NOTICE([     PHYP: $with_phyp])
 AC_MSG_NOTICE([      ESX: $with_esx])
 AC_MSG_NOTICE([  Hyper-V: $with_hyperv])
-AC_MSG_NOTICE([       vz: $with_vz])
+LIBVIRT_DRIVER_RESULT_VZ
 LIBVIRT_DRIVER_RESULT_BHYVE
 AC_MSG_NOTICE([     Test: $with_test])
 AC_MSG_NOTICE([   Remote: $with_remote])

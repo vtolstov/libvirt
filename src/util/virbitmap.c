@@ -71,7 +71,7 @@ virBitmapNewQuiet(size_t size)
     if (SIZE_MAX - VIR_BITMAP_BITS_PER_UNIT < size || size == 0)
         return NULL;
 
-    sz = (size + VIR_BITMAP_BITS_PER_UNIT - 1) / VIR_BITMAP_BITS_PER_UNIT;
+    sz = VIR_DIV_UP(size, VIR_BITMAP_BITS_PER_UNIT);
 
     if (VIR_ALLOC_QUIET(bitmap) < 0)
         return NULL;
@@ -498,9 +498,12 @@ virBitmapPtr virBitmapNewData(void *data, int len)
  */
 int virBitmapToData(virBitmapPtr bitmap, unsigned char **data, int *dataLen)
 {
-    int len;
+    ssize_t len;
 
-    len = (bitmap->max_bit + CHAR_BIT - 1) / CHAR_BIT;
+    if ((len = virBitmapLastSetBit(bitmap)) < 0)
+        len = 1;
+    else
+        len = (len + CHAR_BIT) / CHAR_BIT;
 
     if (VIR_ALLOC_N(*data, len) < 0)
         return -1;

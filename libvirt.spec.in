@@ -2,7 +2,7 @@
 
 # This spec file assumes you are building for Fedora 13 or newer,
 # or for RHEL 5 or newer. It may need some tweaks for other distros.
-# If neither fedora nor rhel was defined, try to guess them from %{dist}
+# If neither fedora nor rhel was defined, try to guess them from dist
 %if !0%{?rhel} && !0%{?fedora}
 %{expand:%(echo "%{?dist}" | \
   sed -ne 's/^\.el\([0-9]\+\).*/%%define rhel \1/p')}
@@ -13,13 +13,13 @@
 # Default to skipping autoreconf.  Distros can change just this one line
 # (or provide a command-line override) if they backport any patches that
 # touch configure.ac or Makefile.am.
-%{!?enable_autotools:%define enable_autotools 0}
+%{!?enable_autotools:%global enable_autotools 0}
 
 # A client only build will create a libvirt.so only containing
 # the generic RPC driver, and test driver and no libvirtd
 # Default to a full server + client build, but with the possibility
 # of a command-line or ~/.rpmmacros override for client-only.
-%{!?client_only:%define client_only 0}
+%{!?client_only:%global client_only 0}
 
 # Now turn off server build in certain cases
 
@@ -531,6 +531,8 @@ BuildRequires: cyrus-sasl-devel
 %endif
 %if %{with_polkit}
     %if 0%{?fedora} >= 20 || 0%{?rhel} >= 7
+# F22 polkit-devel doesn't pull in polkit anymore, which we need for pkcheck
+BuildRequires: polkit >= 0.112
 BuildRequires: polkit-devel >= 0.112
     %else
         %if 0%{?fedora} || 0%{?rhel} >= 6
@@ -1168,7 +1170,7 @@ virtualization capabilities of recent versions of Linux (and other OSes).
 %package wireshark
 Summary: Wireshark dissector plugin for libvirt RPC transactions
 Group: Development/Libraries
-Requires: wireshark
+Requires: wireshark >= 1.12.6-4
 Requires: %{name}-client = %{version}-%{release}
 
 %description wireshark
@@ -1216,15 +1218,6 @@ Includes the Sanlock lock manager plugin for the QEMU
 driver
 %endif
 
-%package admin
-Summary: Client side library and binary for the libvirt admin interface
-Group: Development/Libraries
-Requires: readline
-Requires: %{name}-client = %{version}-%{release}
-
-%description admin
-Shared library and client for admin access to libvirt daemon
-
 
 %prep
 %setup -q
@@ -1263,6 +1256,7 @@ if [ $COUNT -gt 0 ]; then
 fi
 echo "Applied $COUNT patches"
 rm -f $PATCHLIST
+rm -rf .git
 
 %build
 %if ! %{with_xen}
@@ -1553,7 +1547,7 @@ rm -fr %{buildroot}
 # on RHEL 5, thus we need to expand it here.
 make install DESTDIR=%{?buildroot} SYSTEMD_UNIT_DIR=%{_unitdir}
 
-for i in object-events dominfo domsuspend hellolibvirt openauth xml/nwfilter systemtap dommigrate domtop
+for i in object-events dominfo domsuspend hellolibvirt openauth xml/nwfilter systemtap dommigrate domtop rename
 do
   (cd examples/$i ; make clean ; rm -rf .deps .libs Makefile Makefile.in)
 done
@@ -1567,7 +1561,12 @@ rm -f $RPM_BUILD_ROOT%{_libdir}/libvirt/connection-driver/*.a
 %endif
 %if %{with_wireshark}
 rm -f $RPM_BUILD_ROOT%{_libdir}/wireshark/plugins/*/libvirt.la
+mv $RPM_BUILD_ROOT%{_libdir}/wireshark/plugins/*/libvirt.so \
+   $RPM_BUILD_ROOT%{_libdir}/wireshark/plugins/libvirt.so
 %endif
+
+# Temporarily get rid of not-installed libvirt-admin.so
+rm -f $RPM_BUILD_ROOT%{_libdir}/libvirt-admin.so
 
 %if %{with_network}
 install -d -m 0755 $RPM_BUILD_ROOT%{_datadir}/lib/libvirt/dnsmasq/
@@ -2006,7 +2005,7 @@ exit 0
 %config(noreplace) %{_sysconfdir}/logrotate.d/libvirtd.qemu
 %dir %attr(0700, root, root) %{_localstatedir}/log/libvirt/qemu/
 %ghost %dir %attr(0700, root, root) %{_localstatedir}/run/libvirt/qemu/
-%dir %attr(0750, %{qemu_user}, %{qemu_group}) %{_localstatedir}/lib/libvirt/qemu/
+%dir %attr(0751, %{qemu_user}, %{qemu_group}) %{_localstatedir}/lib/libvirt/qemu/
 %dir %attr(0750, %{qemu_user}, %{qemu_group}) %{_localstatedir}/cache/libvirt/qemu/
 %{_datadir}/augeas/lenses/libvirtd_qemu.aug
 %{_datadir}/augeas/lenses/tests/test_libvirtd_qemu.aug
@@ -2041,6 +2040,8 @@ exit 0
 %dir %attr(0700, root, root) %{_localstatedir}/lib/libvirt/xen/
         %endif
     %endif # ! %{with_driver_modules}
+
+%doc examples/polkit/*.rules
 
     %if %{with_network}
 %files daemon-config-network
@@ -2111,7 +2112,7 @@ exit 0
 %config(noreplace) %{_sysconfdir}/libvirt/qemu-lockd.conf
 %config(noreplace) %{_sysconfdir}/logrotate.d/libvirtd.qemu
 %ghost %dir %attr(0700, root, root) %{_localstatedir}/run/libvirt/qemu/
-%dir %attr(0750, %{qemu_user}, %{qemu_group}) %{_localstatedir}/lib/libvirt/qemu/
+%dir %attr(0751, %{qemu_user}, %{qemu_group}) %{_localstatedir}/lib/libvirt/qemu/
 %dir %attr(0750, %{qemu_user}, %{qemu_group}) %{_localstatedir}/cache/libvirt/qemu/
 %{_datadir}/augeas/lenses/libvirtd_qemu.aug
 %{_datadir}/augeas/lenses/tests/test_libvirtd_qemu.aug
@@ -2219,10 +2220,6 @@ exit 0
 %attr(0755, root, root) %{_libexecdir}/libvirt_sanlock_helper
 %endif
 
-%files admin
-%defattr(-, root, root)
-%{_libdir}/libvirt-admin.so.*
-
 %files client -f %{name}.lang
 %defattr(-, root, root)
 %doc COPYING COPYING.LESSER
@@ -2239,6 +2236,7 @@ exit 0
 %{_libdir}/libvirt.so.*
 %{_libdir}/libvirt-qemu.so.*
 %{_libdir}/libvirt-lxc.so.*
+%{_libdir}/libvirt-admin.so.*
 
 %if %{with_dtrace}
 %{_datadir}/systemtap/tapset/libvirt_probes*.stp
@@ -2283,7 +2281,7 @@ exit 0
 
 %if %{with_wireshark}
 %files wireshark
-%{_libdir}/wireshark/plugins/*/libvirt.so
+%{_libdir}/wireshark/plugins/libvirt.so
 %endif
 
 %if %{with_lxc}
@@ -2299,7 +2297,6 @@ exit 0
 %{_libdir}/libvirt.so
 %{_libdir}/libvirt-qemu.so
 %{_libdir}/libvirt-lxc.so
-%{_libdir}/libvirt-admin.so
 %dir %{_includedir}/libvirt
 %{_includedir}/libvirt/virterror.h
 %{_includedir}/libvirt/libvirt.h
@@ -2316,17 +2313,14 @@ exit 0
 %{_includedir}/libvirt/libvirt-stream.h
 %{_includedir}/libvirt/libvirt-qemu.h
 %{_includedir}/libvirt/libvirt-lxc.h
-%{_includedir}/libvirt/libvirt-admin.h
 %{_libdir}/pkgconfig/libvirt.pc
 %{_libdir}/pkgconfig/libvirt-qemu.pc
 %{_libdir}/pkgconfig/libvirt-lxc.pc
-%{_libdir}/pkgconfig/libvirt-admin.pc
 
 %dir %{_datadir}/libvirt/api/
 %{_datadir}/libvirt/api/libvirt-api.xml
 %{_datadir}/libvirt/api/libvirt-qemu-api.xml
 %{_datadir}/libvirt/api/libvirt-lxc-api.xml
-%{_datadir}/libvirt/api/libvirt-admin-api.xml
 
 
 %doc docs/*.html docs/html docs/*.gif
@@ -2338,9 +2332,33 @@ exit 0
 %doc examples/dommigrate
 %doc examples/openauth
 %doc examples/xml
+%doc examples/rename
 %doc examples/systemtap
 
 %changelog
+* Wed Nov  4 2015 Daniel Veillard <veillard@redhat.com> - 1.2.21-1
+- a number of improvements and bug fixes
+
+* Fri Oct  2 2015 Daniel Veillard <veillard@redhat.com> - 1.2.20-1
+- security fixes for CVE-2015-5247
+- a number of improvements and bug fixes
+
+* Wed Sep  2 2015 Daniel Veillard <veillard@redhat.com> - 1.2.19-1
+- Big improvements on ppc64 support
+- New virDomainRename API
+- Support for QEMU new pci emulations
+- a number of improvements and bug fixes
+
+* Mon Aug  3 2015 Daniel Veillard <veillard@redhat.com> - 1.2.18-1
+- libxl: support dom0
+- a number of improvements and bug fixes
+
+* Thu Jul  2 2015 Daniel Veillard <veillard@redhat.com> - 1.2.17-1
+- numerous improvements and refactoring of the parallels driver
+- hardening of vcpu code
+- hardening of migration code
+- a lot of improvement and bug fixes
+
 * Mon Jun  1 2015 Daniel Veillard <veillard@redhat.com> - 1.2.16-1
 - Introduce pci-serial
 - Introduce virDomainSetUserPassword API

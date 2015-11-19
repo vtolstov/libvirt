@@ -375,6 +375,12 @@
       &lt;entry name='product'&gt;Virt-Manager&lt;/entry&gt;
       &lt;entry name='version'&gt;0.9.4&lt;/entry&gt;
     &lt;/system&gt;
+    &lt;baseBoard&gt;
+      &lt;entry name='manufacturer'&gt;LENOVO&lt;/entry&gt;
+      &lt;entry name='product'&gt;20BE0061MC&lt;/entry&gt;
+      &lt;entry name='version'&gt;0B98401 Pro&lt;/entry&gt;
+      &lt;entry name='serial'&gt;W1KS427111E&lt;/entry&gt;
+    &lt;/baseBoard&gt;
   &lt;/sysinfo&gt;
   ...</pre>
 
@@ -435,11 +441,32 @@
                 <dt><code>family</code></dt>
                 <dd>Identify the family a particular computer belongs to.</dd>
             </dl>
-            NB: Incorrectly supplied entries in either the <code>bios</code>
-            or <code>system</code> blocks will be ignored without error.
-            Other than <code>uuid</code> validation and <code>date</code>
-            format checking, all values are passed as strings to the
-            hypervisor driver.
+          </dd>
+          <dt><code>baseBoard</code></dt>
+          <dd>
+            This is block 2 of SMBIOS. This element can be repeated multiple
+            times to describe all the base boards; however, not all
+            hypervisors necessarily support the repetition. The element can
+            have the following children:
+            <dl>
+                <dt><code>manufacturer</code></dt>
+                <dd>Manufacturer of BIOS</dd>
+                <dt><code>product</code></dt>
+                <dd>Product Name</dd>
+                <dt><code>version</code></dt>
+                <dd>Version of the product</dd>
+                <dt><code>serial</code></dt>
+                <dd>Serial number</dd>
+                <dt><code>asset</code></dt>
+                <dd>Asset tag</dd>
+                <dt><code>location</code></dt>
+                <dd>Location in chassis</dd>
+            </dl>
+            NB: Incorrectly supplied entries for the
+            <code>bios</code>, <code>system</code> or <code>baseBoard</code>
+            blocks will be ignored without error.  Other than <code>uuid</code>
+            validation and <code>date</code> format checking, all values are
+            passed as strings to the hypervisor driver.
           </dd>
         </dl>
       </dd>
@@ -699,8 +726,7 @@
         If no <code>iothreadids</code> are defined, then libvirt numbers
         IOThreads from 1 to the number of <code>iothreads</code> available
         for the domain. For real-time schedulers (<code>fifo</code>,
-        <code>rr</code>), priority must real-time schedulers
-        (<code>fifo</code>, <code>rr</code>), priority must be specified as
+        <code>rr</code>), priority must be specified as
         well (and is ignored for non-real-time ones). The value range
         for the priority depends on the host kernel (usually 1-99).
         <span class="since">Since 1.2.13</span>
@@ -1438,7 +1464,7 @@
     &lt;kvm&gt;
       &lt;hidden state='on'/&gt;
     &lt;/kvm&gt;
-    &lt;pvspinlock/&gt;
+    &lt;pvspinlock state='on'/&gt;
     &lt;gic version='2'/&gt;
 
   &lt;/features&gt;
@@ -1946,7 +1972,10 @@
             Using "lun" (<span class="since">since 0.9.10</span>) is only
             valid when the <code>type</code> is "block" or "network" for
             <code>protocol='iscsi'</code> or when the <code>type</code>
-            is "volume" when using an iSCSI source <code>pool</code>.
+            is "volume" when using an iSCSI source <code>pool</code>
+            for <code>mode</code> "host" or as an
+            <a href="http://wiki.libvirt.org/page/NPIV_in_libvirt">NPIV</a>
+            virtual Host Bus Adapter (vHBA) using a Fibre Channel storage pool.
             Configured in this manner, the LUN behaves identically to "disk",
             except that generic SCSI commands from the guest are accepted
             and passed through to the physical device. Also note that
@@ -1975,10 +2004,10 @@
           <dt><code>sgio</code> attribute
           <span class="since">since 1.0.2</span></dt>
             <dd>
-            Indicates whether the kernel will filter unprivileged
-            SG_IO commands for the disk, valid settings are "filtered" or
-            "unfiltered". Defaults to "filtered". Similar to <code>rawio</code>,
-            <code>sgio</code> is only valid for device 'lun'.
+            If supported by the hypervisor and OS, indicates whether
+            unprivileged SG_IO commands are filtered for the disk. Valid
+            settings are "filtered" or "unfiltered" where the default is
+            "filtered". Only available when the <code>device</code> is 'lun'.
             </dd>
           <dt><code>snapshot</code> attribute
           <span class="since">since 0.9.5</span></dt>
@@ -2746,7 +2775,7 @@
             attribute provides the format type. For example, LXC
             supports a type of "loop", with a format of "raw" or
             "nbd" with any format. QEMU supports a type of "path"
-            or "handle", but no formats. Parallels driver supports
+            or "handle", but no formats. Virtuozzo driver supports
             a type of "ploop" with a format of "ploop".
           </li>
         </ul>
@@ -2839,7 +2868,7 @@
       <dd>Drive addresses have the following additional
         attributes: <code>controller</code> (a 2-digit controller
         number), <code>bus</code> (a 2-digit bus number),
-        <code>target</code> (a 2-digit bus number),
+        <code>target</code> (a 2-digit target number),
         and <code>unit</code> (a 2-digit unit number on the bus).
       </dd>
       <dt><code>type='virtio-serial'</code></dt>
@@ -2971,6 +3000,14 @@
         a sector is 512 bytes.
         <span class="since">Since 1.2.7 (QEMU and KVM only)</span>
       </dd>
+      <dt><code>ioeventfd</code></dt>
+      <dd>
+        The optional <code>ioeventfd</code> attribute specifies
+        whether the controller should use
+        <a href='https://patchwork.kernel.org/patch/43390/'>
+        I/O asynchronous handling</a> or not.  Accepted values are
+        "on" and "off". <span class="since">Since 1.2.18</span>
+      </dd>
     </dl>
     <p>
       USB companion controllers have an optional
@@ -2978,6 +3015,11 @@
       relationship of the companion to its master controller.
       A companion controller is on the same bus as its master, so
       the companion <code>index</code> value should be equal.
+      Not all controller models can be used as companion controllers
+      and libvirt might provide some sensible defaults (settings
+      of <code>master startport</code> and <code>function</code> of an
+      address) for some particular models.
+      Preferred companion controllers are <code>ich-uhci[123]</code>.
     </p>
 
 <pre>
@@ -2997,7 +3039,13 @@
     <p>
       PCI controllers have an optional <code>model</code> attribute with
       possible values <code>pci-root</code>, <code>pcie-root</code>,
-      <code>pci-bridge</code>, or <code>dmi-to-pci-bridge</code>.
+      <code>pcie-root-port</code>, <code>pci-bridge</code>,
+      <code>dmi-to-pci-bridge</code>, <code>pcie-switch-upstream-port</code>, or
+      <code>pcie-switch-downstream-port</code>.
+      (pci-root and pci-bridge <span class="since">since 1.0.5</span>,
+      pcie-root and dmi-to-pci-bridge <span class="since">since
+      1.1.2</span>, pcie-root-port, pcie-switch-upstream-port, and
+      pcie-switch-downstream-port <span class="since">since 1.2.19</span>)
       The root controllers (<code>pci-root</code> and <code>pcie-root</code>)
       have an optional <code>pcihole64</code> element specifying how big
       (in kilobytes, or in the unit specified by <code>pcihole64</code>'s
@@ -3006,6 +3054,61 @@
       are recent enough to support 64-bit PCI holes, unless this is disabled
       (set to 0). <span class="since">Since 1.1.2 (QEMU only)</span>
     </p>
+    <p>
+      PCI controllers also have an optional
+      subelement <code>&lt;model&gt;</code> with an attribute
+      <code>name</code>. The name attribute holds the name of the
+      specific device that qemu is emulating (e.g. "i82801b11-bridge")
+      rather than simply the class of device ("dmi-to-pci-bridge",
+      "pci-bridge"), which is set in the controller element's
+      model <b>attribute</b>.  In almost all cases, you should not
+      manually add a <code>&lt;model&gt;</code> subelement to a
+      controller, nor should you modify one that is automatically
+      generated by libvirt. <span class="since">Since 1.2.19 (QEMU
+      only).</span>
+    </p>
+    <p>
+      PCI controllers also have an optional
+      subelement <code>&lt;target&gt;</code> with the attributes
+      listed below. These are configurable items that 1) are visible
+      to the guest OS so must be preserved for guest ABI
+      compatibility, and 2) are usually left to default values or
+      derived automatically by libvirt. In almost all cases, you
+      should not manually add a <code>&lt;target&gt;</code> subelement
+      to a controller, nor should you modify the values in the those
+      that are automatically generated by
+      libvirt. <span class="since">Since 1.2.19 (QEMU only).</span>
+    </p>
+    <dl>
+      <dt><code>chassisNr</code></dt>
+      <dd>
+        PCI controllers that have attribute model="pci-bridge", can
+        also have a <code>chassisNr</code> attribute in
+        the <code>&lt;target&gt;</code> subelement, which is used to
+        control QEMU's "chassis_nr" option for the pci-bridge device
+        (normally libvirt automatically sets this to the same value as
+        the index attribute of the pci controller). If set, chassisNr
+        must be between 0 and 255.
+      </dd>
+      <dt><code>chassis</code></dt>
+      <dd>
+        pcie-root-port and pcie-switch-downstream-port controllers can
+        also have a <code>chassis</code> attribute in
+        the <code>&lt;target&gt;</code> subelement, which is used to
+        set the controller's "chassis" configuration value, which is
+        visible to the virtual machine. If set, chassis must be
+        between 0 and 255.
+      </dd>
+      <dt><code>port</code></dt>
+      <dd>
+        pcie-root-port and pcie-switch-downstream-port controllers can
+        also have a <code>port</code> attribute in
+        the <code>&lt;target&gt;</code> subelement, which
+        is used to set the controller's "port" configuration value,
+        which is visible to the virtual machine. If set, port must be
+        between 0 and 255.
+      </dd>
+    </dl>
     <p>
       For machine types which provide an implicit PCI bus, the pci-root
       controller with index=0 is auto-added and required to use PCI devices.
@@ -3017,7 +3120,6 @@
       only refer to PCI buses provided by already specified PCI controllers.
       Leaving gaps in the PCI controller indexes might lead to an invalid
       configuration.
-      (pci-root and pci-bridge <span class="since">since 1.0.5</span>)
     </p>
 <pre>
   ...
@@ -3034,19 +3136,52 @@
       bus (for example, the machine types based on the Q35 chipset),
       the pcie-root controller with index=0 is auto-added to the
       domain's configuration. pcie-root has also no address, provides
-      31 slots (numbered 1-31) and can only be used to attach PCIe
-      devices. In order to connect standard PCI devices on a system
-      which has a pcie-root controller, a pci controller
+      31 slots (numbered 1-31) that can be used to attach PCIe or PCI
+      devices (although libvirt will never auto-assign a PCI device to
+      a PCIe slot, it will allow manual specification of such an
+      assignment). Devices connected to pcie-root cannot be
+      hotplugged. In order to make standard PCI slots available on a
+      system which has a pcie-root controller, a pci controller
       with <code>model='dmi-to-pci-bridge'</code> is automatically
-      added. A dmi-to-pci-bridge controller plugs into a PCIe slot (as
-      provided by pcie-root), and itself provides 31 standard PCI
-      slots (which are not hot-pluggable). In order to have
+      added, usually at the defacto standard location of slot=0x1e. A
+      dmi-to-pci-bridge controller plugs into a PCIe slot (as provided
+      by pcie-root), and itself provides 31 standard PCI slots (which
+      also do not support device hotplug). In order to have
       hot-pluggable PCI slots in the guest system, a pci-bridge
       controller will also be automatically created and connected to
       one of the slots of the auto-created dmi-to-pci-bridge
-      controller; all guest devices with PCI addresses that are
+      controller; all guest PCI devices with addresses that are
       auto-determined by libvirt will be placed on this pci-bridge
       device.  (<span class="since">since 1.1.2</span>).
+    </p>
+    <p>
+      Domains with an implicit pcie-root can also add controllers
+      with <code>model='pcie-root-port'</code>,
+      <code>model='pcie-switch-upstream-port'</code>,
+      and <code>model='pcie-switch-downstream-port'</code>. pcie-root-port
+      is a simple type of bridge device that can connect only to one
+      of the 31 slots on the pcie-root bus on its upstream side, and
+      makes a single (PCIe, hotpluggable) port available on the
+      downstream side (at slot='0'). pcie-root-port can be used to
+      provide a single slot to later hotplug a PCIe device (but is not
+      itself hotpluggable - it must be in the configuration when the
+      domain is started).
+      (<span class="since">since 1.2.19</span>)
+    </p>
+    <p>
+      pcie-switch-upstream-port is a more flexible (but also more
+      complex) device that can only plug into a pcie-root-port or
+      pcie-switch-downstream-port on the upstream side (and only
+      before the domain is started - it is not hot-pluggable), and
+      provides 32 ports on the downstream side (slot='0' - slot='31')
+      that accept only pcie-switch-downstream-port devices; each
+      pcie-switch-downstream-port device can only plug into a
+      pcie-switch-upstream-port on its upstream side (again, not
+      hot-pluggable), and on its downstream side provides a single
+      hotpluggable pcie port that can accept any standard pci or pcie
+      device (or another pcie-switch-upstream-port), i.e. identical in
+      function to a pcie-root-port.  (<span class="since">since
+      1.2.19</span>)
     </p>
 <pre>
   ...
@@ -3148,7 +3283,7 @@
     &lt;hostdev mode='subsystem' type='scsi' sgio='filtered' rawio='yes'&gt;
       &lt;source&gt;
         &lt;adapter name='scsi_host0'/&gt;
-        &lt;address type='scsi' bus='0' target='0' unit='0'/&gt;
+        &lt;address bus='0' target='0' unit='0'/&gt;
       &lt;/source&gt;
       &lt;readonly/&gt;
       &lt;address type='drive' controller='0' bus='0' target='0' unit='0'/&gt;
@@ -3199,11 +3334,12 @@
           </dd>
           <dt>scsi</dt>
           <dd>For SCSI devices, user is responsible to make sure the device
-            is not used by host. The optional <code>sgio</code>
-            (<span class="since">since 1.0.6</span>) attribute indicates
-            whether the kernel will filter unprivileged SG_IO commands for
-            the disk, valid settings are "filtered" or "unfiltered".
-            The default is "filtered". The optional <code>rawio</code>
+            is not used by host. If supported by the hypervisor and OS, the
+            optional <code>sgio</code> (<span class="since">since 1.0.6</span>)
+            attribute indicates whether unprivileged SG_IO commands are
+            filtered for the disk. Valid settings are "filtered" or
+            "unfiltered", where the default is "filtered".
+            The optional <code>rawio</code>
             (<span class="since">since 1.2.9</span>) attribute indicates
             whether the lun needs the rawio capability. Valid settings are
             "yes" or "no". See the rawio description within the
@@ -3256,7 +3392,14 @@
           </dd>
           <dt>scsi</dt>
           <dd>SCSI devices are described by both the <code>adapter</code>
-            and <code>address</code> elements.
+            and <code>address</code> elements. The <code>address</code>
+            element includes a <code>bus</code> attribute (a 2-digit bus
+            number), a <code>target</code> attribute (a 10-digit target
+            number), and a <code>unit</code> attribute (a 20-digit unit
+            number on the bus). Not all hypervisors support larger
+            <code>target</code> and <code>unit</code> values. It is up
+            to each hypervisor to determine the maximum value supported
+            for the adapter.
             <p>
             <span class="since">Since 1.2.8</span>, the <code>source</code>
             element of a SCSI device may contain the <code>protocol</code>
@@ -3309,8 +3452,8 @@
       (starting with 0x) or octal (starting with 0) form.
       For PCI devices the element carries 4 attributes allowing to designate
       the device as can be found with the <code>lspci</code> or
-      with <code>virsh
-      nodedev-list</code>. <a href="#elementsAddress">See above</a> for
+      with <code>virsh nodedev-list</code>. For SCSI devices a 'drive'
+      address type must be used. <a href="#elementsAddress">See above</a> for
       more details on the address element.</dd>
       <dt><code>driver</code></dt>
       <dd>
@@ -4117,6 +4260,30 @@
   &lt;/devices&gt;
   ...</pre>
 
+    <h5><a name="elementsNICSUDP">UDP unicast tunnel</a></h5>
+
+    <p>
+    A UDP unicast architecture provides a virtual network which enables
+    connections between QEMU instances using QEMU's UDP infrastructure.
+
+    The xml "source" address is the endpoint address to which the UDP socket
+    packets will be sent from the host running QEMU.
+    The xml "local" address is the address of the interface from which the
+    UDP socket packets will originate from the QEMU host.
+    <span class="since">Since 1.2.20</span></p>
+
+<pre>
+  ...
+  &lt;devices&gt;
+    &lt;interface type='udp'&gt;
+      &lt;mac address='52:54:00:22:c9:42'/&gt;
+      &lt;source address='127.0.0.1' port='11115'&gt;
+        &lt;local address='127.0.0.1' port='11116'/&gt;
+      &lt;/source&gt;
+    &lt;/interface&gt;
+  &lt;/devices&gt;
+  ...</pre>
+
     <h5><a name="elementsNICSModel">Setting the NIC model</a></h5>
 
 <pre>
@@ -4275,7 +4442,7 @@ qemu-kvm -net nic,model=? /dev/null
         element.  Each queue will potentially be handled by a different
         processor, resulting in much higher throughput.
         <span class="since">virtio-net since 1.0.6 (QEMU and KVM only)</span>
-        <span class="since">vhost-user since 1.3.0 (QEMU and KVM only)</span>
+        <span class="since">vhost-user since 1.2.17 (QEMU and KVM only)</span>
       </dd>
       <dt><code>host</code> offloading options</dt>
       <dd>
@@ -4992,13 +5159,13 @@ qemu-kvm -net nic,model=? /dev/null
         <p>
           You can provide the amount of video memory in kibibytes (blocks of
           1024 bytes) using <code>vram</code>. This is supported only for guest
-          type of "libxl", "parallels", "qemu", "vbox", "vmx" and "xen". If no
+          type of "libxl", "vz", "qemu", "vbox", "vmx" and "xen". If no
           value is provided the default is used. If the size is not a power of
           two it will be rounded to closest one.
         </p>
         <p>
           The number of screen can be set using <code>heads</code>. This is
-          supported only for guests type of "parallels", "kvm", "vbox" and "vmx".
+          supported only for guests type of "vz", "kvm", "vbox" and "vmx".
         </p>
         <p>
           For guest type of kvm the optional attribute <code>ram</code>
@@ -5683,6 +5850,8 @@ qemu-kvm -net nic,model=? /dev/null
           <li> 'i6300esb' &mdash; the recommended device,
             emulating a PCI Intel 6300ESB </li>
           <li> 'ib700' &mdash; emulating an ISA iBase IB700 </li>
+          <li> 'diag288' &mdash; emulating an S390 DIAG288 device
+            <span class="since">Since 1.2.17</span></li>
         </ul>
       </dd>
       <dt><code>action</code></dt>
@@ -5704,6 +5873,9 @@ qemu-kvm -net nic,model=? /dev/null
           <li>'none' &mdash; do nothing</li>
           <li>'dump' &mdash; automatically dump the guest
             <span class="since">Since 0.8.7</span></li>
+          <li>'inject-nmi' &mdash; inject a non-maskable interrupt
+            into the guest
+            <span class="since">Since 1.2.17</span></li>
         </ul>
         <p>
         Note 1: the 'shutdown' action requires that the guest
@@ -6128,8 +6300,9 @@ qemu-kvm -net nic,model=? /dev/null
           added memory as a scaled integer.
         </p>
         <p>
-          The mandatory <code>node</code> subelement configures the guest NUMA
-          node to attach the memory to.
+          The <code>node</code> subelement configures the guest NUMA node to
+          attach the memory to. The element shall be used only if the guest has
+          NUMA nodes configured.
         </p>
       </dd>
     </dl>

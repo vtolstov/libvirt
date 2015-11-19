@@ -68,7 +68,7 @@ vmwareCapsInit(void)
                                    false, false)) == NULL)
         goto error;
 
-    if (nodeCapsInitNUMA(caps) < 0)
+    if (nodeCapsInitNUMA(NULL, caps) < 0)
         goto error;
 
     /* i686 guests are always supported */
@@ -145,6 +145,9 @@ vmwareLoadDomains(struct vmware_driver *driver)
     virCommandPtr cmd;
 
     ctx.parseFileName = vmwareCopyVMXFileName;
+    ctx.formatFileName = NULL;
+    ctx.autodetectSCSIControllerModel = NULL;
+    ctx.datacenterPath = NULL;
 
     cmd = virCommandNewArgList(driver->vmrun, "-T",
                                vmwareDriverTypeToString(driver->type),

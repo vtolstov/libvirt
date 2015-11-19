@@ -748,6 +748,15 @@ typedef enum {
  */
 # define VIR_MIGRATE_PARAM_LISTEN_ADDRESS    "listen_address"
 
+/**
+ * VIR_MIGRATE_PARAM_MIGRATE_DISKS:
+ *
+ * virDomainMigrate* params multiple field: The multiple values that list
+ * the block devices to be migrated. At the moment this is only supported
+ * by the QEMU driver but not for the tunnelled migration.
+ */
+# define VIR_MIGRATE_PARAM_MIGRATE_DISKS    "migrate_disks"
+
 /* Domain migration. */
 virDomainPtr virDomainMigrate (virDomainPtr domain, virConnectPtr dconn,
                                unsigned long flags, const char *dname,
@@ -1324,6 +1333,13 @@ int                     virDomainInterfaceStats (virDomainPtr dom,
  * Macro represents the inbound burst of NIC bandwidth, as a uint.
  */
 # define VIR_DOMAIN_BANDWIDTH_IN_BURST "inbound.burst"
+
+/**
+ * VIR_DOMAIN_BANDWIDTH_IN_FLOOR:
+ *
+ * Macro represents the inbound floor of NIC bandwidth, as a uint.
+ */
+# define VIR_DOMAIN_BANDWIDTH_IN_FLOOR "inbound.floor"
 
 /**
  * VIR_DOMAIN_BANDWIDTH_OUT_AVERAGE:
@@ -2313,6 +2329,7 @@ typedef enum {
 typedef enum {
     VIR_DOMAIN_EVENT_DEFINED_ADDED = 0,     /* Newly created config file */
     VIR_DOMAIN_EVENT_DEFINED_UPDATED = 1,   /* Changed config file */
+    VIR_DOMAIN_EVENT_DEFINED_RENAMED = 2,   /* Domain was renamed */
 
 # ifdef VIR_ENUM_SENTINELS
     VIR_DOMAIN_EVENT_DEFINED_LAST
@@ -2326,6 +2343,7 @@ typedef enum {
  */
 typedef enum {
     VIR_DOMAIN_EVENT_UNDEFINED_REMOVED = 0, /* Deleted the config file */
+    VIR_DOMAIN_EVENT_UNDEFINED_RENAMED = 1, /* Domain was renamed */
 
 # ifdef VIR_ENUM_SENTINELS
     VIR_DOMAIN_EVENT_UNDEFINED_LAST
@@ -2833,6 +2851,7 @@ typedef enum {
     VIR_DOMAIN_EVENT_WATCHDOG_POWEROFF, /* Guest is forcibly powered off */
     VIR_DOMAIN_EVENT_WATCHDOG_SHUTDOWN, /* Guest is requested to gracefully shutdown */
     VIR_DOMAIN_EVENT_WATCHDOG_DEBUG,    /* No action, a debug message logged */
+    VIR_DOMAIN_EVENT_WATCHDOG_INJECTNMI,/* Inject a non-maskable interrupt into guest */
 
 # ifdef VIR_ENUM_SENTINELS
     VIR_DOMAIN_EVENT_WATCHDOG_LAST
@@ -3826,5 +3845,9 @@ int virDomainSetUserPassword(virDomainPtr dom,
                              const char *user,
                              const char *password,
                              unsigned int flags);
+
+int virDomainRename(virDomainPtr dom,
+                    const char *new_name,
+                    unsigned int flags);
 
 #endif /* __VIR_LIBVIRT_DOMAIN_H__ */

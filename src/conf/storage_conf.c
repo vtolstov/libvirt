@@ -1873,7 +1873,7 @@ virStoragePoolLoadState(virStoragePoolObjListPtr pools,
     if (!(def = virStoragePoolDefParseXML(ctxt)))
         goto error;
 
-    if (!STREQ(name, def->name)) {
+    if (STRNEQ(name, def->name)) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Storage pool state file '%s' does not match "
                          "pool name '%s'"),
@@ -2471,13 +2471,22 @@ virStoragePoolSourceFindDuplicate(virConnectPtr conn,
             if (STREQ(pool->def->target.path, def->target.path))
                 matchpool = pool;
             break;
-        case VIR_STORAGE_POOL_NETFS:
+
         case VIR_STORAGE_POOL_GLUSTER:
+            if (STREQ(pool->def->source.name, def->source.name) &&
+                STREQ_NULLABLE(pool->def->source.dir, def->source.dir) &&
+                virStoragePoolSourceMatchSingleHost(&pool->def->source,
+                                                    &def->source))
+                matchpool = pool;
+            break;
+
+        case VIR_STORAGE_POOL_NETFS:
             if (STREQ(pool->def->source.dir, def->source.dir) &&
                 virStoragePoolSourceMatchSingleHost(&pool->def->source,
                                                     &def->source))
                 matchpool = pool;
             break;
+
         case VIR_STORAGE_POOL_SCSI:
             if (pool->def->source.adapter.type ==
                 VIR_STORAGE_POOL_SOURCE_ADAPTER_TYPE_FC_HOST &&
@@ -2560,6 +2569,9 @@ virStoragePoolSourceFindDuplicate(virConnectPtr conn,
                 matchpool = pool;
             break;
         case VIR_STORAGE_POOL_MPATH:
+            /* Only one mpath pool is valid per host */
+            matchpool = pool;
+            break;
         case VIR_STORAGE_POOL_RBD:
         case VIR_STORAGE_POOL_LAST:
             break;

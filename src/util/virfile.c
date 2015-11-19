@@ -63,6 +63,7 @@
 #include "vircommand.h"
 #include "virerror.h"
 #include "virfile.h"
+#include "virkmod.h"
 #include "virlog.h"
 #include "virprocess.h"
 #include "virstring.h"
@@ -680,7 +681,7 @@ static int virFileLoopDeviceOpen(char **dev_name)
     if (virFileLoopDeviceOpenLoopCtl(dev_name, &loop_fd) < 0)
         return -1;
 
-    VIR_DEBUG("Return from loop-control got fd %d\n", loop_fd);
+    VIR_DEBUG("Return from loop-control got fd %d", loop_fd);
 
     if (loop_fd >= 0)
         return loop_fd;
@@ -745,6 +746,7 @@ int virFileLoopDeviceAssociate(const char *file,
 
 
 # define SYSFS_BLOCK_DIR "/sys/block"
+# define NBD_DRIVER "nbd"
 
 
 static int
@@ -795,8 +797,7 @@ virFileNBDDeviceFindUnused(void)
             if (rv < 0)
                 goto cleanup;
             if (rv == 0) {
-                if (virAsprintf(&ret, "/dev/%s", de->d_name) < 0)
-                    goto cleanup;
+                ignore_value(virAsprintf(&ret, "/dev/%s", de->d_name));
                 goto cleanup;
             }
         }
@@ -811,17 +812,41 @@ virFileNBDDeviceFindUnused(void)
     return ret;
 }
 
+static bool
+virFileNBDLoadDriver(void)
+{
+    if (virKModIsBlacklisted(NBD_DRIVER)) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                       _("Failed to load nbd module: "
+                         "administratively prohibited"));
+        return false;
+    } else {
+        char *errbuf = NULL;
+
+        if ((errbuf = virKModLoad(NBD_DRIVER, true))) {
+            VIR_FREE(errbuf);
+            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                           _("Failed to load nbd module"));
+            return false;
+        }
+        VIR_FREE(errbuf);
+    }
+    return true;
+}
 
 int virFileNBDDeviceAssociate(const char *file,
                               virStorageFileFormat fmt,
                               bool readonly,
                               char **dev)
 {
-    char *nbddev;
+    char *nbddev = NULL;
     char *qemunbd = NULL;
     virCommandPtr cmd = NULL;
     int ret = -1;
     const char *fmtstr = NULL;
+
+    if (!virFileNBDLoadDriver())
+        goto cleanup;
 
     if (!(nbddev = virFileNBDDeviceFindUnused()))
         goto cleanup;
@@ -909,13 +934,17 @@ int virFileNBDDeviceAssociate(const char *file,
  */
 int virFileDeleteTree(const char *dir)
 {
-    DIR *dh = opendir(dir);
+    DIR *dh;
     struct dirent *de;
     char *filepath = NULL;
     int ret = -1;
     int direrr;
 
-    if (!dh) {
+    /* Silently return 0 if passed NULL or directory doesn't exist */
+    if (!dir || !virFileExists(dir))
+        return 0;
+
+    if (!(dh = opendir(dir))) {
         virReportSystemError(errno, _("Cannot open dir '%s'"),
                              dir);
         return -1;
@@ -979,7 +1008,7 @@ virFileStripSuffix(char *str, const char *suffix)
     if (len < suffixlen)
         return 0;
 
-    if (!STREQ(str + len - suffixlen, suffix))
+    if (STRNEQ(str + len - suffixlen, suffix))
         return 0;
 
     str[len-suffixlen] = '\0';
@@ -2028,18 +2057,24 @@ virFileOpenForceOwnerMode(const char *path, int fd, mode_t mode,
  * virFileOpenAs(). It forks, then the child does setuid+setgid to
  * given uid:gid and attempts to open the file, while the parent just
  * calls recvfd to get the open fd back from the child. returns the
- * fd, or -errno if there is an error. */
+ * fd, or -errno if there is an error. Additionally, to avoid another
+ * round-trip to unlink the file in a forked process; on error if this
+ * function created the file, but failed to perform some action after
+ * creation, then perform the unlink of the file. The storage driver
+ * buildVol backend function expects the file to be deleted on error.
+ */
 static int
 virFileOpenForked(const char *path, int openflags, mode_t mode,
                   uid_t uid, gid_t gid, unsigned int flags)
 {
     pid_t pid;
-    int waitret, status, ret = 0;
+    int status = 0, ret = 0;
     int recvfd_errno = 0;
     int fd = -1;
     int pair[2] = { -1, -1 };
     gid_t *groups;
     int ngroups;
+    bool created = false;
 
     /* parent is running as root, but caller requested that the
      * file be opened as some other user and/or group). The
@@ -2084,11 +2119,18 @@ virFileOpenForked(const char *path, int openflags, mode_t mode,
                                  path);
             goto childerror;
         }
+        if (openflags & O_CREAT)
+            created = true;
 
         /* File is successfully open. Set permissions if requested. */
         ret = virFileOpenForceOwnerMode(path, fd, mode, uid, gid, flags);
-        if (ret < 0)
+        if (ret < 0) {
+            ret = -errno;
+            virReportSystemError(errno,
+                                 _("child process failed to force owner mode file '%s'"),
+                                 path);
             goto childerror;
+        }
 
         do {
             ret = sendfd(pair[1], fd);
@@ -2107,8 +2149,11 @@ virFileOpenForked(const char *path, int openflags, mode_t mode,
         /* XXX This makes assumptions about errno being < 255, which is
          * not true on Hurd.  */
         VIR_FORCE_CLOSE(pair[1]);
-        if (ret < 0)
+        if (ret < 0) {
             VIR_FORCE_CLOSE(fd);
+            if (created)
+                unlink(path);
+        }
         ret = -ret;
         if ((ret & 0xff) != ret) {
             VIR_WARN("unable to pass desired return value %d", ret);
@@ -2129,42 +2174,21 @@ virFileOpenForked(const char *path, int openflags, mode_t mode,
     if (fd < 0)
         recvfd_errno = errno;
 
-    /* wait for child to complete, and retrieve its exit code
-     * if waitpid fails, use that status
-     */
-    while ((waitret = waitpid(pid, &status, 0)) == -1 && errno == EINTR);
-    if (waitret == -1) {
-        ret = -errno;
-        virReportSystemError(errno,
-                             _("failed to wait for child creating '%s'"),
-                             path);
-        VIR_FORCE_CLOSE(fd);
-        return ret;
+    if (virProcessWait(pid, &status, 0) < 0) {
+        /* virProcessWait() reports errno on waitpid failure, so we'll just
+         * set our return status to EINTR; otherwise, set status to EACCES
+         * since the original failure for the fork+setuid path would have
+         * been EACCES or EPERM by definition.
+         */
+        if (virLastErrorIsSystemErrno(0))
+            status = EINTR;
+        else if (!status)
+            status = EACCES;
     }
 
-    /*
-     * If waitpid succeeded, but if the child exited abnormally or
-     * reported non-zero status, report failure.
-     */
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        char *msg = virProcessTranslateStatus(status);
-        virReportError(VIR_ERR_INTERNAL_ERROR,
-                       _("child failed to create '%s': %s"),
-                       path, msg);
+    if (status) {
         VIR_FORCE_CLOSE(fd);
-        VIR_FREE(msg);
-        /* Use child exit status if possible; otherwise,
-         * just use -EACCES, since by our original failure in
-         * the non fork+setuid path would have been EACCES or
-         * EPERM by definition (see qemuOpenFileAs after the
-         * first virFileOpenAs failure), but EACCES is close enough.
-         * Besides -EPERM is like returning fd == -1.
-         */
-        if (WIFEXITED(status))
-            ret = -WEXITSTATUS(status);
-        else
-            ret = -EACCES;
-        return ret;
+        return -status;
     }
 
     /* if waitpid succeeded, but recvfd failed, report recvfd_errno */
@@ -2205,13 +2229,18 @@ virFileOpenForked(const char *path, int openflags, mode_t mode,
  * the file already existed with different permissions).
  *
  * The return value (if non-negative) is the file descriptor, left
- * open.  Returns -errno on failure.
+ * open.  Returns -errno on failure. Additionally, to avoid another
+ * round-trip to unlink the file; on error if this function created the
+ * file, but failed to perform some action after creation, then perform
+ * the unlink of the file. The storage driver buildVol backend function
+ * expects the file to be deleted on error.
  */
 int
 virFileOpenAs(const char *path, int openflags, mode_t mode,
               uid_t uid, gid_t gid, unsigned int flags)
 {
     int ret = 0, fd = -1;
+    bool created = false;
 
     /* allow using -1 to mean "current value" */
     if (uid == (uid_t) -1)
@@ -2233,6 +2262,8 @@ virFileOpenAs(const char *path, int openflags, mode_t mode,
             if (!(flags & VIR_FILE_OPEN_FORK))
                 goto error;
         } else {
+            if (openflags & O_CREAT)
+                created = true;
             ret = virFileOpenForceOwnerMode(path, fd, mode, uid, gid, flags);
             if (ret < 0)
                 goto error;
@@ -2275,12 +2306,130 @@ virFileOpenAs(const char *path, int openflags, mode_t mode,
     if (fd >= 0) {
         /* some other failure after the open succeeded */
         VIR_FORCE_CLOSE(fd);
+        if (created)
+            unlink(path);
     }
     /* whoever failed the open last has already set ret = -errno */
     return ret;
 }
 
-/* return -errno on failure, or 0 on success */
+
+/* virFileRemove:
+ * @path: file to unlink or directory to remove
+ * @uid: uid that was used to create the file (not required)
+ * @gid: gid that was used to create the file (not required)
+ *
+ * If a file/volume was created in an NFS root-squash environment,
+ * then we must 'unlink' the file in the same environment. Unlike
+ * the virFileOpenAs[Forked] and virDirCreate[NoFork], this code
+ * takes no extra flags and does not bother with EACCES failures
+ * from the child.
+ */
+int
+virFileRemove(const char *path,
+              uid_t uid,
+              gid_t gid)
+{
+    pid_t pid;
+    int status = 0, ret = 0;
+    gid_t *groups;
+    int ngroups;
+
+    /* If not running as root or if a non explicit uid/gid was being used for
+     * the file/volume or the explicit uid/gid matches, then use unlink directly
+     */
+    if ((geteuid() != 0) ||
+        ((uid == (uid_t) -1) && (gid == (gid_t) -1)) ||
+        (uid == geteuid() && gid == getegid())) {
+        if (virFileIsDir(path))
+            return rmdir(path);
+        else
+            return unlink(path);
+    }
+
+    /* Otherwise, we have to deal with the NFS root-squash craziness
+     * to run under the uid/gid that created the volume in order to
+     * perform the unlink of the volume.
+     */
+    if (uid == (uid_t) -1)
+        uid = geteuid();
+    if (gid == (gid_t) -1)
+        gid = getegid();
+
+    ngroups = virGetGroupList(uid, gid, &groups);
+    if (ngroups < 0)
+        return -errno;
+
+    pid = virFork();
+
+    if (pid < 0) {
+        ret = -errno;
+        VIR_FREE(groups);
+        return ret;
+    }
+
+    if (pid) { /* parent */
+        /* wait for child to complete, and retrieve its exit code */
+        VIR_FREE(groups);
+
+        if (virProcessWait(pid, &status, 0) < 0) {
+            /* virProcessWait() reports errno on waitpid failure, so we'll just
+             * set our return status to EINTR; otherwise, set status to EACCES
+             * since the original failure for the fork+setuid path would have
+             * been EACCES or EPERM by definition.
+             */
+            if (virLastErrorIsSystemErrno(0))
+                status = EINTR;
+            else if (!status)
+                status = EACCES;
+        }
+
+        if (status) {
+            errno = status;
+            ret = -1;
+        }
+
+        return ret;
+    }
+
+    /* child */
+
+    /* set desired uid/gid, then attempt to unlink the file */
+    if (virSetUIDGID(uid, gid, groups, ngroups) < 0) {
+        ret = errno;
+        goto childerror;
+    }
+
+    if (virFileIsDir(path)) {
+        if (rmdir(path) < 0) {
+            ret = errno;
+            goto childerror;
+        }
+    } else {
+        if (unlink(path) < 0) {
+            ret = errno;
+            goto childerror;
+        }
+    }
+
+ childerror:
+    if ((ret & 0xff) != ret) {
+        VIR_WARN("unable to pass desired return value %d", ret);
+        ret = 0xff;
+    }
+    _exit(ret);
+}
+
+
+/* Attempt to create a directory and possibly adjust its owner/group and
+ * permissions.
+ *
+ * return 0 on success or -errno on failure. Additionally to avoid another
+ * round-trip to remove the directory on failure, perform the rmdir when
+ * a mkdir was successful, but some other failure would cause a -1 return.
+ * The storage driver buildVol backend function expects the directory to
+ * be deleted on error.
+ */
 static int
 virDirCreateNoFork(const char *path,
                    mode_t mode, uid_t uid, gid_t gid,
@@ -2288,6 +2437,7 @@ virDirCreateNoFork(const char *path,
 {
     int ret = 0;
     struct stat st;
+    bool created = false;
 
     if (!((flags & VIR_DIR_CREATE_ALLOW_EXIST) && virFileExists(path))) {
         if (mkdir(path, mode) < 0) {
@@ -2296,6 +2446,7 @@ virDirCreateNoFork(const char *path,
                                  path);
             goto error;
         }
+        created = true;
     }
 
     if (stat(path, &st) == -1) {
@@ -2319,10 +2470,30 @@ virDirCreateNoFork(const char *path,
         goto error;
     }
  error:
+    if (ret < 0 && created)
+        rmdir(path);
     return ret;
 }
 
-/* return -errno on failure, or 0 on success */
+/*
+ * virDirCreate:
+ * @path: directory to create
+ * @mode: mode to use on creation or when forcing permissions
+ * @uid: uid that should own directory
+ * @gid: gid that should own directory
+ * @flags: bit-wise or of VIR_DIR_CREATE_* flags
+ *
+ * Attempt to create a directory and possibly adjust its owner/group and
+ * permissions. If conditions allow, use the *NoFork code in order to create
+ * the directory under current owner/group rather than via a forked process.
+ *
+ * return 0 on success or -errno on failure. Additionally to avoid another
+ * round-trip to remove the directory on failure, perform the rmdir if a
+ * mkdir was successful, but some other failure would cause a -1 return.
+ * The storage driver buildVol backend function expects the directory to
+ * be deleted on error.
+ *
+ */
 int
 virDirCreate(const char *path,
              mode_t mode, uid_t uid, gid_t gid,
@@ -2330,10 +2501,10 @@ virDirCreate(const char *path,
 {
     struct stat st;
     pid_t pid;
-    int waitret;
-    int status, ret = 0;
+    int status = 0, ret = 0;
     gid_t *groups;
     int ngroups;
+    bool created = false;
 
     /* Everything after this check is crazyness to allow setting uid/gid
      * on directories that are on root-squash NFS shares. We only want
@@ -2377,36 +2548,30 @@ virDirCreate(const char *path,
         /* wait for child to complete, and retrieve its exit code */
         VIR_FREE(groups);
 
-        while ((waitret = waitpid(pid, &status, 0)) == -1 && errno == EINTR);
-        if (waitret == -1) {
-            ret = -errno;
-            virReportSystemError(errno,
-                                 _("failed to wait for child creating '%s'"),
-                                 path);
-            goto parenterror;
+        if (virProcessWait(pid, &status, 0) < 0) {
+            /* virProcessWait() reports errno on waitpid failure, so we'll just
+             * set our return status to EINTR; otherwise, set status to EACCES
+             * since the original failure for the fork+setuid path would have
+             * been EACCES or EPERM by definition.
+             */
+            if (virLastErrorIsSystemErrno(0))
+                status = EINTR;
+            else if (!status)
+                status = EACCES;
         }
 
         /*
-         * If waitpid succeeded, but if the child exited abnormally or
-         * reported non-zero status, report failure, except for EACCES where
-         * we try to fall back to non-fork method as in the original logic
-         * introduced and explained by commit 98f6f381.
+         * If the child exited with EACCES, then fall back to non-fork method
+         * as in the original logic introduced and explained by commit 98f6f381.
          */
-        if (!WIFEXITED(status) || (WEXITSTATUS(status)) != 0) {
-            if (WEXITSTATUS(status) == EACCES)
-                return virDirCreateNoFork(path, mode, uid, gid, flags);
-            char *msg = virProcessTranslateStatus(status);
-            virReportError(VIR_ERR_INTERNAL_ERROR,
-                           _("child failed to create '%s': %s"),
-                           path, msg);
-            VIR_FREE(msg);
-            if (WIFEXITED(status))
-                ret = -WEXITSTATUS(status);
-            else
-                ret = -EACCES;
+        if (status == EACCES) {
+            virResetLastError();
+            return virDirCreateNoFork(path, mode, uid, gid, flags);
         }
 
- parenterror:
+        if (status)
+            ret = -status;
+
         return ret;
     }
 
@@ -2427,6 +2592,7 @@ virDirCreate(const char *path,
         }
         goto childerror;
     }
+    created = true;
 
     /* check if group was set properly by creating after
      * setgid. If not, try doing it with chown */
@@ -2453,6 +2619,9 @@ virDirCreate(const char *path,
     }
 
  childerror:
+    if (ret != 0 && created)
+        rmdir(path);
+
     if ((ret & 0xff) != ret) {
         VIR_WARN("unable to pass desired return value %d", ret);
         ret = 0xff;
@@ -2500,6 +2669,20 @@ virDirCreate(const char *path ATTRIBUTE_UNUSED,
                    "%s", _("virDirCreate is not implemented for WIN32"));
 
     return -ENOSYS;
+}
+
+int
+virFileRemove(const char *path,
+              uid_t uid ATTRIBUTE_UNUSED,
+              gid_t gid ATTRIBUTE_UNUSED)
+{
+    if (unlink(path) < 0) {
+        virReportSystemError(errno, _("Unable to unlink path '%s'"),
+                             path);
+        return -1;
+    }
+
+    return 0;
 }
 #endif /* WIN32 */
 

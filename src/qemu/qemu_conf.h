@@ -81,7 +81,6 @@ typedef virQEMUDriverConfig *virQEMUDriverConfigPtr;
 struct _virQEMUDriverConfig {
     virObject parent;
 
-    bool privileged;
     const char *uri;
 
     uid_t user;
@@ -193,10 +192,13 @@ struct _virQEMUDriver {
     virThreadPoolPtr workerPool;
 
     /* Atomic increment only */
-    int nextvmid;
+    int lastvmid;
 
     /* Atomic inc/dec only */
     unsigned int nactive;
+
+    /* Immutable value */
+    bool privileged;
 
     /* Immutable pointers. Caller must provide locking */
     virStateInhibitCallback inhibitCallback;
@@ -250,6 +252,9 @@ struct _virQEMUDriver {
 
     /* Immutable pointer, self-clocking APIs */
     virCloseCallbacksPtr closeCallbacks;
+
+    /* Immutable pointer, self-locking APIs */
+    virHashAtomicPtr migrationErrors;
 };
 
 typedef struct _qemuDomainCmdlineDef qemuDomainCmdlineDef;
@@ -273,6 +278,7 @@ int virQEMUDriverConfigLoadFile(virQEMUDriverConfigPtr cfg,
                                 const char *filename);
 
 virQEMUDriverConfigPtr virQEMUDriverGetConfig(virQEMUDriverPtr driver);
+bool virQEMUDriverIsPrivileged(virQEMUDriverPtr driver);
 
 virCapsPtr virQEMUDriverCreateCapabilities(virQEMUDriverPtr driver);
 virCapsPtr virQEMUDriverGetCapabilities(virQEMUDriverPtr driver,

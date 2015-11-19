@@ -105,6 +105,8 @@ int virNetDevClearIPAddress(const char *ifname,
     ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_RETURN_CHECK;
 int virNetDevGetIPAddress(const char *ifname, virSocketAddrPtr addr)
     ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_RETURN_CHECK;
+int virNetDevWaitDadFinish(virSocketAddrPtr *addrs, size_t count)
+    ATTRIBUTE_NONNULL(1);
 
 
 int virNetDevSetMAC(const char *ifname,
@@ -112,6 +114,16 @@ int virNetDevSetMAC(const char *ifname,
     ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_RETURN_CHECK;
 int virNetDevGetMAC(const char *ifname,
                     virMacAddrPtr macaddr)
+    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_RETURN_CHECK;
+
+int virNetDevReplaceMacAddress(const char *linkdev,
+                               const virMacAddr *macaddress,
+                               const char *stateDir)
+    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_NONNULL(3)
+    ATTRIBUTE_RETURN_CHECK;
+
+int virNetDevRestoreMacAddress(const char *linkdev,
+                               const char *stateDir)
     ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_RETURN_CHECK;
 
 int virNetDevSetMTU(const char *ifname,
@@ -210,6 +222,7 @@ int virNetDevGetRcvAllMulti(const char *ifname, bool *receive)
     ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_RETURN_CHECK;
 
 # define SYSFS_NET_DIR "/sys/class/net/"
+# define SYSFS_INFINIBAND_DIR "/sys/class/infiniband/"
 int virNetDevSysfsFile(char **pf_sysfs_device_link,
                        const char *ifname,
                        const char *file)

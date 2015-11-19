@@ -46,7 +46,7 @@
 VIR_LOG_INIT("tests.securityselinuxlabeltest");
 
 static virCapsPtr caps;
-static virDomainXMLOptionPtr xmlopt;
+static virQEMUDriver driver;
 
 static virSecurityManagerPtr mgr;
 
@@ -189,7 +189,7 @@ testSELinuxLoadDef(const char *testname)
                     abs_srcdir, testname) < 0)
         goto cleanup;
 
-    if (!(def = virDomainDefParseFile(xmlfile, caps, xmlopt, 0)))
+    if (!(def = virDomainDefParseFile(xmlfile, caps, driver.xmlopt, 0)))
         goto cleanup;
 
     for (i = 0; i < def->ndisks; i++) {
@@ -282,7 +282,7 @@ testSELinuxCheckLabels(testSELinuxFile *files, size_t nfiles)
                 return -1;
             }
         }
-        if (!STREQ_NULLABLE(files[i].context, ctx)) {
+        if (STRNEQ_NULLABLE(files[i].context, ctx)) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
                            "File %s context '%s' did not match epected '%s'",
                            files[i].file, ctx, files[i].context);
@@ -351,7 +351,9 @@ mymain(void)
     if (!rc)
         return EXIT_AM_SKIP;
 
-    if (!(mgr = virSecurityManagerNew("selinux", "QEMU", false, true, false))) {
+    if (!(mgr = virSecurityManagerNew("selinux", "QEMU",
+                                      VIR_SECURITY_MANAGER_DEFAULT_CONFINED |
+                                      VIR_SECURITY_MANAGER_PRIVILEGED))) {
         virErrorPtr err = virGetLastError();
         VIR_TEST_VERBOSE("Unable to initialize security driver: %s\n",
                 err->message);
@@ -361,7 +363,7 @@ mymain(void)
     if ((caps = testQemuCapsInit()) == NULL)
         return EXIT_FAILURE;
 
-    if (!(xmlopt = virQEMUDriverCreateXMLConf(NULL)))
+    if (qemuTestDriverInit(&driver) < 0)
         return EXIT_FAILURE;
 
 #define DO_TEST_LABELING(name)                                           \
@@ -374,6 +376,8 @@ mymain(void)
     DO_TEST_LABELING("kernel");
     DO_TEST_LABELING("chardev");
     DO_TEST_LABELING("nfs");
+
+    qemuTestDriverFree(&driver);
 
     return (ret == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
 }

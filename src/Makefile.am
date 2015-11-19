@@ -31,6 +31,7 @@ INCLUDES =	-I../gnulib/lib					\
 		-I../include					\
 		-I$(top_srcdir)/include				\
 		-I$(srcdir)/util				\
+		-I./util					\
 		-DIN_LIBVIRT					\
 		-Dabs_topbuilddir="\"$(abs_topbuilddir)\""	\
 		-Dabs_topsrcdir="\"$(abs_topsrcdir)\""		\
@@ -172,16 +173,15 @@ UTIL_SOURCES =							\
 		util/virxml.c util/virxml.h			\
 		$(NULL)
 
-
-EXTRA_DIST += $(srcdir)/util/virkeymaps.h $(srcdir)/util/keymaps.csv \
-		$(srcdir)/util/virkeycode-mapgen.py
+EXTRA_DIST += $(srcdir)/util/keymaps.csv $(srcdir)/util/virkeycode-mapgen.py
 
 BUILT_SOURCES += util/virkeymaps.h
+MAINTAINERCLEANFILES += util/virkeymaps.h
 
 util/virkeymaps.h: $(srcdir)/util/keymaps.csv	\
 		$(srcdir)/util/virkeycode-mapgen.py
 	$(AM_V_GEN)$(PYTHON) $(srcdir)/util/virkeycode-mapgen.py \
-	  <$(srcdir)/util/keymaps.csv >$(srcdir)/util/virkeymaps.h
+	  <$(srcdir)/util/keymaps.csv >util/virkeymaps.h
 
 # Internal generic driver infrastructure
 NODE_INFO_SOURCES = nodeinfo.h nodeinfo.c nodeinfopriv.h
@@ -451,7 +451,7 @@ PDWTAGS = \
 	    $(PERL) -0777 -n						\
 		-e 'foreach my $$p (split m!\n*(?:$(r1)|$(r2))\n!) {'	\
 		-e '  if ($$p =~ /^(struct|enum) $(struct_prefix)/ ||'	\
-		-e '      $$p =~ /^enum {/) {'				\
+		-e '      $$p =~ /^enum \{/) {'				\
 		-e '    $$p =~ s!\t*/\*.*?\*/!!sg;'			\
 		-e '    $$p =~ s!\s+\n!\n!sg;'				\
 		-e '    $$p =~ s!\s+$$!!;'				\
@@ -486,12 +486,19 @@ if WITH_LINUX
 check-symfile: libvirt.syms libvirt.la
 	$(AM_V_GEN)$(PERL) $(srcdir)/check-symfile.pl libvirt.syms \
 	  .libs/libvirt.so
+check-admin-symfile: libvirt_admin.syms libvirt-admin.la
+	$(AM_V_GEN)$(PERL) $(srcdir)/check-symfile.pl libvirt_admin.syms \
+	  .libs/libvirt-admin.so
 else ! WITH_LINUX
 check-symfile:
+check-admin-symfile:
 endif ! WITH_LINUX
 check-symsorting:
 	$(AM_V_GEN)$(PERL) $(srcdir)/check-symsorting.pl \
 		$(srcdir) $(SYM_FILES)
+check-admin-symsorting:
+	$(AM_V_GEN)$(PERL) $(srcdir)/check-symsorting.pl \
+		$(srcdir) $(ADMIN_SYM_FILES)
 EXTRA_DIST += check-symfile.pl check-symsorting.pl
 
 # Keep this list synced with RPC_PROBE_FILES
@@ -540,7 +547,7 @@ check-drivername:
 	$(AM_V_GEN)$(PERL) $(srcdir)/check-drivername.pl \
 		$(srcdir)/driver.h \
 		$(srcdir)/libvirt_public.syms \
-		$(srcdir)/libvirt_admin.syms \
+		$(srcdir)/libvirt_admin_public.syms \
 		$(srcdir)/libvirt_qemu.syms \
 		$(srcdir)/libvirt_lxc.syms
 
@@ -610,7 +617,7 @@ EXTRA_DIST += check-driverimpls.pl check-aclrules.pl check-aclperms.pl
 
 check-local: check-protocol check-symfile check-symsorting \
 	check-drivername check-driverimpls check-aclrules \
-	check-aclperms
+	check-aclperms check-admin-symfile check-admin-symsorting
 .PHONY: check-protocol $(PROTOCOL_STRUCTS:structs=struct)
 
 # Mock driver, covering domains, storage, networks, etc
@@ -756,7 +763,8 @@ QEMU_DRIVER_SOURCES =							\
 		qemu/qemu_monitor_json.c				\
 		qemu/qemu_monitor_json.h				\
 		qemu/qemu_driver.c qemu/qemu_driver.h	\
-		qemu/qemu_interface.c qemu/qemu_interface.h
+		qemu/qemu_interface.c qemu/qemu_interface.h		\
+		qemu/qemu_capspriv.h
 
 XENAPI_DRIVER_SOURCES =						\
 		xenapi/xenapi_driver.c xenapi/xenapi_driver.h	\
@@ -831,8 +839,6 @@ VZ_DRIVER_SOURCES =					\
 		vz/vz_driver.c			\
 		vz/vz_utils.c			\
 		vz/vz_utils.h			\
-		vz/vz_storage.c		\
-		vz/vz_network.c		\
 		vz/vz_sdk.h			\
 		vz/vz_sdk.c
 
@@ -1008,8 +1014,9 @@ CPU_SOURCES =							\
 		cpu/cpu_s390.h cpu/cpu_s390.c			\
 		cpu/cpu_arm.h cpu/cpu_arm.c			\
 		cpu/cpu_aarch64.h cpu/cpu_aarch64.c		\
-		cpu/cpu_map.h cpu/cpu_map.c cpu/cpu_powerpc.h	\
-		cpu/cpu_powerpc.c cpu/cpu_ppc_data.h
+		cpu/cpu_ppc64.h cpu/cpu_ppc64.c			\
+		cpu/cpu_ppc64_data.h				\
+		cpu/cpu_map.h cpu/cpu_map.c
 
 VMX_SOURCES =							\
 		vmx/vmx.c vmx/vmx.h
@@ -1099,7 +1106,7 @@ USED_SYM_FILES = $(srcdir)/libvirt_private.syms
 GENERATED_SYM_FILES = \
 	$(ACCESS_DRIVER_SYM_FILES) \
 	libvirt.syms libvirt.def libvirt_qemu.def libvirt_lxc.def \
-	libvirt_admin.def \
+	libvirt_admin.syms libvirt_admin.def \
 	$(NULL)
 
 if WITH_TEST
@@ -1319,7 +1326,12 @@ libvirt_driver_lxc_impl_la_CFLAGS = \
 		-I$(srcdir)/access \
 		-I$(srcdir)/conf \
 		$(AM_CFLAGS)
-libvirt_driver_lxc_impl_la_LIBADD = $(CAPNG_LIBS) $(LIBNL_LIBS) $(FUSE_LIBS)
+libvirt_driver_lxc_impl_la_LIBADD = \
+               $(CAPNG_LIBS) \
+               $(LIBNL_LIBS) \
+               $(LIBXML_LIBS) \
+               $(FUSE_LIBS)
+
 if WITH_BLKID
 libvirt_driver_lxc_impl_la_CFLAGS += $(BLKID_CFLAGS)
 libvirt_driver_lxc_impl_la_LIBADD += $(BLKID_LIBS)
@@ -2009,8 +2021,9 @@ EXTRA_DIST += \
 	libvirt_public.syms		\
 	libvirt_lxc.syms		\
 	libvirt_qemu.syms		\
-	libvirt_admin.syms		\
+	libvirt_admin_public.syms	\
 	$(SYM_FILES)			\
+	$(ADMIN_SYM_FILES)		\
 	$(NULL)
 
 BUILT_SOURCES += $(GENERATED_SYM_FILES)
@@ -2037,6 +2050,19 @@ libvirt.syms: libvirt_public.syms $(USED_SYM_FILES) \
 	chmod a-w $@-tmp && \
 	mv $@-tmp $@
 
+libvirt_admin.syms: libvirt_admin_public.syms $(ADMIN_SYM_FILES) \
+		$(top_builddir)/config.status
+	$(AM_V_GEN)rm -f $@-tmp $@ ; \
+	printf '# WARNING: generated from the following:\n# $^\n\n' >$@-tmp && \
+	cat $(srcdir)/libvirt_admin_public.syms >>$@-tmp && \
+	printf '\n\n# Private symbols\n\n' >>$@-tmp && \
+	printf 'LIBVIRT_ADMIN_PRIVATE_$(VERSION) {\n\n'  >>$@-tmp && \
+	printf 'global:\n\n' >>$@-tmp && \
+	cat $(ADMIN_SYM_FILES) >>$@-tmp && \
+	printf '\n\nlocal:\n*;\n\n};' >>$@-tmp && \
+	chmod a-w $@-tmp && \
+	mv $@-tmp libvirt_admin.syms
+
 lib_LTLIBRARIES += libvirt-admin.la
 libvirt_admin_la_SOURCES = \
 		libvirt-admin.c			\
@@ -2061,6 +2087,7 @@ libvirt_admin_la_CFLAGS = \
 		-I$(srcdir)/admin
 
 libvirt_admin_la_CFLAGS += \
+		$(XDR_CFLAGS)			\
 		$(CAPNG_CFLAGS)			\
 		$(YAJL_CFLAGS)			\
 		$(SSH2_CFLAGS)			\
@@ -2075,6 +2102,8 @@ libvirt_admin_la_LIBADD += \
 		$(SSH2_LIBS)			\
 		$(SASL_LIBS)			\
 		$(GNUTLS_LIBS)
+
+ADMIN_SYM_FILES = $(srcdir)/libvirt_admin_private.syms
 
 if WITH_DTRACE_PROBES
 libvirt_admin_la_LIBADD += libvirt_probes.lo
@@ -2776,7 +2805,7 @@ if WITH_SANLOCK
 	$(MKDIR_P) "$(DESTDIR)$(localstatedir)/lib/libvirt/sanlock"
 endif WITH_SANLOCK
 if WITH_QEMU
-	$(MKDIR_P) "$(DESTDIR)$(localstatedir)/lib/libvirt/qemu"
+	$(MKDIR_P) -m 0751 "$(DESTDIR)$(localstatedir)/lib/libvirt/qemu"
 	$(MKDIR_P) "$(DESTDIR)$(localstatedir)/run/libvirt/qemu"
 	$(MKDIR_P) "$(DESTDIR)$(localstatedir)/cache/libvirt/qemu"
 	$(MKDIR_P) "$(DESTDIR)$(localstatedir)/log/libvirt/qemu"

@@ -90,7 +90,7 @@ endif
 
 # Files that should never cause syntax check failures.
 VC_LIST_ALWAYS_EXCLUDE_REGEX = \
-  (^(HACKING|docs/(news\.html\.in|.*\.patch))|\.(po|fig|gif|ico|png))$$
+  (^(HACKING|docs/(news(-[0-9]*)?\.html\.in|.*\.patch))|\.(po|fig|gif|ico|png))$$
 
 # Functions like free() that are no-ops on NULL arguments.
 useless_free_options =				\
@@ -919,6 +919,15 @@ sc_require_space_before_label:
 	halt="Top-level labels should be indented by one space"        \
 	  $(_sc_search_regexp)
 
+# Allow for up to three spaces before the label: this is to avoid running
+# into situations where neither this rule nor require_space_before_label
+# would apply, eg. a line matching ^[a-zA-Z0-9]+ :$
+sc_prohibit_space_in_label:
+	@prohibit='^ {0,3}[_a-zA-Z0-9]+ +:$$'                          \
+	in_vc_files='\.[ch]$$'                                         \
+	halt="There should be no space between label name and colon"   \
+	  $(_sc_search_regexp)
+
 # Doesn't catch all cases of mismatched braces across if-else, but it helps
 sc_require_if_else_matching_braces:
 	@prohibit='(  else( if .*\))? {|} else( if .*\))?$$)'		\
@@ -1011,6 +1020,16 @@ sc_prohibit_pthread_create:
 	halt="avoid using 'pthread_create', use 'virThreadCreate' instead" \
 	  $(_sc_search_regexp)
 
+sc_prohibit_not_streq:
+	@prohibit='! *STREQ *\(.*\)'		\
+	halt='Use STRNEQ instead of !STREQ'	\
+	  $(_sc_search_regexp)
+
+sc_prohibit_not_strneq:
+	@prohibit='! *STRNEQ *\(.*\)'       \
+	halt='Use STREQ instead of !STRNEQ'	\
+	  $(_sc_search_regexp)
+
 # We don't use this feature of maint.mk.
 prev_version_file = /dev/null
 
@@ -1058,7 +1077,7 @@ _autogen:
 
 # regenerate HACKING as part of the syntax-check
 ifneq ($(_gl-Makefile),)
-syntax-check: $(top_srcdir)/HACKING bracket-spacing-check
+syntax-check: $(top_srcdir)/HACKING bracket-spacing-check test-wrap-argv
 endif
 
 bracket-spacing-check:
@@ -1066,6 +1085,20 @@ bracket-spacing-check:
 	$(PERL) $(top_srcdir)/build-aux/bracket-spacing.pl $$files || \
 	  { echo '$(ME): incorrect formatting, see HACKING for rules' 1>&2; \
 	    exit 1; }
+
+test-wrap-argv:
+	$(AM_V_GEN)files=`$(VC_LIST) | grep -E '\.(ldargs|args)'`; \
+	for file in $$files ; \
+	do \
+	    $(PERL) $(top_srcdir)/tests/test-wrap-argv.pl $$file > $${file}-t ; \
+	    diff $$file $${file}-t; \
+	    res=$$? ; \
+	    rm $${file}-t ; \
+	    test $$res == 0 || { \
+	      echo "$(ME): Incorrect line wrapping in $$file." 1>&2; \
+              echo "$(ME): Use test-wrap-argv.pl to wrap test data files" 1>&2; \
+	      exit 1; } \
+	done
 
 # sc_po_check can fail if generated files are not built first
 sc_po_check: \
@@ -1086,7 +1119,7 @@ $(srcdir)/src/admin/admin_client.h: $(srcdir)/src/admin/admin_protocol.x
 	$(MAKE) -C src admin/admin_client.h
 
 # List all syntax-check exemptions:
-exclude_file_name_regexp--sc_avoid_strcase = ^tools/virsh\.h$$
+exclude_file_name_regexp--sc_avoid_strcase = ^tools/vsh\.h$$
 
 _src1=libvirt-stream|fdstream|qemu/qemu_monitor|util/(vircommand|virfile)|xen/xend_internal|rpc/virnetsocket|lxc/lxc_controller|locking/lock_daemon
 _test1=shunloadtest|virnettlscontexttest|virnettlssessiontest|vircgroupmock
@@ -1213,3 +1246,9 @@ exclude_file_name_regexp--sc_prohibit_sysconf_pagesize = \
 
 exclude_file_name_regexp--sc_prohibit_pthread_create = \
   ^(cfg\.mk|src/util/virthread\.c|tests/.*)$$
+
+exclude_file_name_regexp--sc_prohibit_not_streq = \
+  ^tests/.*\.[ch]$$
+
+exclude_file_name_regexp--sc_prohibit_not_strneq = \
+  ^tests/.*\.[ch]$$

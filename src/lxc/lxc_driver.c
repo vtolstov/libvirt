@@ -597,7 +597,7 @@ static int lxcDomainGetInfo(virDomainPtr dom,
 
     if (!virDomainObjIsActive(vm)) {
         info->cpuTime = 0;
-        info->memory = 0;
+        info->memory = vm->def->mem.cur_balloon;
     } else {
         if (virCgroupGetCpuacctUsage(priv->cgroup, &(info->cpuTime)) < 0) {
             virReportError(VIR_ERR_OPERATION_FAILED,
@@ -734,7 +734,7 @@ static int lxcDomainSetMemoryFlags(virDomainPtr dom, unsigned long newmem,
         }
 
         if (flags & VIR_DOMAIN_AFFECT_CONFIG) {
-            virDomainDefSetMemoryInitial(persistentDef, newmem);
+            virDomainDefSetMemoryTotal(persistentDef, newmem);
             if (persistentDef->mem.cur_balloon > newmem)
                 persistentDef->mem.cur_balloon = newmem;
             if (virDomainSaveConfig(cfg->configDir, persistentDef) < 0)
@@ -1229,6 +1229,7 @@ lxcDomainCreateXMLWithFiles(virConnectPtr conn,
 
     if (!(vm = virDomainObjListAdd(driver->domains, def,
                                    driver->xmlopt,
+                                   VIR_DOMAIN_OBJ_LIST_ADD_LIVE |
                                    VIR_DOMAIN_OBJ_LIST_ADD_CHECK_LIVE,
                                    NULL)))
         goto cleanup;
@@ -1239,8 +1240,10 @@ lxcDomainCreateXMLWithFiles(virConnectPtr conn,
                            (flags & VIR_DOMAIN_START_AUTODESTROY),
                            VIR_DOMAIN_RUNNING_BOOTED) < 0) {
         virDomainAuditStart(vm, "booted", false);
-        virDomainObjListRemove(driver->domains, vm);
-        vm = NULL;
+        if (!vm->persistent) {
+            virDomainObjListRemove(driver->domains, vm);
+            vm = NULL;
+        }
         goto cleanup;
     }
 
@@ -1553,12 +1556,17 @@ static int lxcCheckNetNsSupport(void)
 static virSecurityManagerPtr
 lxcSecurityInit(virLXCDriverConfigPtr cfg)
 {
+    unsigned int flags = VIR_SECURITY_MANAGER_PRIVILEGED;
+
     VIR_INFO("lxcSecurityInit %s", cfg->securityDriverName);
+
+    if (cfg->securityDefaultConfined)
+        flags |= VIR_SECURITY_MANAGER_DEFAULT_CONFINED;
+    if (cfg->securityRequireConfined)
+        flags |= VIR_SECURITY_MANAGER_REQUIRE_CONFINED;
+
     virSecurityManagerPtr mgr = virSecurityManagerNew(cfg->securityDriverName,
-                                                      LXC_DRIVER_NAME,
-                                                      false,
-                                                      cfg->securityDefaultConfined,
-                                                      cfg->securityRequireConfined);
+                                                      LXC_DRIVER_NAME, flags);
     if (!mgr)
         goto error;
 
@@ -2603,7 +2611,10 @@ lxcDomainSetBlkioParameters(virDomainPtr dom,
                     for (j = 0; j < ndevices; j++) {
                         if (virCgroupSetBlkioDeviceWeight(priv->cgroup,
                                                           devices[j].path,
-                                                          devices[j].weight) < 0) {
+                                                          devices[j].weight) < 0 ||
+                            virCgroupGetBlkioDeviceWeight(priv->cgroup,
+                                                          devices[j].path,
+                                                          &devices[j].weight) < 0) {
                             ret = -1;
                             break;
                         }
@@ -2612,7 +2623,10 @@ lxcDomainSetBlkioParameters(virDomainPtr dom,
                     for (j = 0; j < ndevices; j++) {
                         if (virCgroupSetBlkioDeviceReadIops(priv->cgroup,
                                                             devices[j].path,
-                                                            devices[j].riops) < 0) {
+                                                            devices[j].riops) < 0 ||
+                            virCgroupGetBlkioDeviceReadIops(priv->cgroup,
+                                                            devices[j].path,
+                                                            &devices[j].riops) < 0) {
                             ret = -1;
                             break;
                         }
@@ -2621,7 +2635,10 @@ lxcDomainSetBlkioParameters(virDomainPtr dom,
                     for (j = 0; j < ndevices; j++) {
                         if (virCgroupSetBlkioDeviceWriteIops(priv->cgroup,
                                                              devices[j].path,
-                                                             devices[j].wiops) < 0) {
+                                                             devices[j].wiops) < 0 ||
+                            virCgroupGetBlkioDeviceWriteIops(priv->cgroup,
+                                                             devices[j].path,
+                                                             &devices[j].wiops) < 0) {
                             ret = -1;
                             break;
                         }
@@ -2630,7 +2647,10 @@ lxcDomainSetBlkioParameters(virDomainPtr dom,
                     for (j = 0; j < ndevices; j++) {
                         if (virCgroupSetBlkioDeviceReadBps(priv->cgroup,
                                                            devices[j].path,
-                                                           devices[j].rbps) < 0) {
+                                                           devices[j].rbps) < 0 ||
+                            virCgroupGetBlkioDeviceReadBps(priv->cgroup,
+                                                           devices[j].path,
+                                                           &devices[j].rbps) < 0) {
                             ret = -1;
                             break;
                         }
@@ -2639,7 +2659,10 @@ lxcDomainSetBlkioParameters(virDomainPtr dom,
                     for (j = 0; j < ndevices; j++) {
                         if (virCgroupSetBlkioDeviceWriteBps(priv->cgroup,
                                                             devices[j].path,
-                                                            devices[j].wbps) < 0) {
+                                                            devices[j].wbps) < 0 ||
+                            virCgroupGetBlkioDeviceWriteBps(priv->cgroup,
+                                                            devices[j].path,
+                                                            &devices[j].wbps) < 0) {
                             ret = -1;
                             break;
                         }
@@ -3484,7 +3507,8 @@ lxcDomainOpenConsole(virDomainPtr dom,
 
     if (chr->source.type != VIR_DOMAIN_CHR_TYPE_PTY) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
-                       _("character device %s is not using a PTY"), dev_name);
+                       _("character device %s is not using a PTY"),
+                       dev_name ? dev_name : NULLSTR(chr->info.alias));
         goto cleanup;
     }
 
@@ -4068,11 +4092,9 @@ lxcDomainAttachDeviceDiskLive(virLXCDriverPtr driver,
         goto cleanup;
     }
 
-    if (!virDomainDiskSourceIsBlockType(def->src)) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                       _("Can't setup disk for non-block device"));
+    if (!virDomainDiskSourceIsBlockType(def->src, true))
         goto cleanup;
-    }
+
     src = virDomainDiskGetSource(def);
     if (src == NULL) {
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
@@ -5399,7 +5421,7 @@ lxcNodeGetInfo(virConnectPtr conn,
     if (virNodeGetInfoEnsureACL(conn) < 0)
         return -1;
 
-    return nodeGetInfo(nodeinfo);
+    return nodeGetInfo(NULL, nodeinfo);
 }
 
 
@@ -5485,7 +5507,7 @@ lxcNodeGetMemoryStats(virConnectPtr conn,
     if (virNodeGetMemoryStatsEnsureACL(conn) < 0)
         return -1;
 
-    return nodeGetMemoryStats(cellNum, params, nparams, flags);
+    return nodeGetMemoryStats(NULL, cellNum, params, nparams, flags);
 }
 
 
@@ -5552,7 +5574,7 @@ lxcNodeGetCPUMap(virConnectPtr conn,
     if (virNodeGetCPUMapEnsureACL(conn) < 0)
         return -1;
 
-    return nodeGetCPUMap(cpumap, online, flags);
+    return nodeGetCPUMap(NULL, cpumap, online, flags);
 }
 
 

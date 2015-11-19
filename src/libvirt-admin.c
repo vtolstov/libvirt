@@ -25,8 +25,9 @@
 #include <rpc/rpc.h>
 
 #include "internal.h"
-#include "configmake.h"
 #include "datatypes.h"
+#include "configmake.h"
+
 #include "viralloc.h"
 #include "virlog.h"
 #include "virnetclient.h"
@@ -131,6 +132,7 @@ remoteAdminPrivFree(void *opaque)
     virAdmConnectPtr conn = opaque;
 
     remoteAdminConnectClose(conn);
+    virObjectUnref(conn->privateData);
 }
 
 static remoteAdminPrivPtr

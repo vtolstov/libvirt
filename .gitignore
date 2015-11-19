@@ -83,6 +83,7 @@
 /examples/domtop/domtop
 /examples/hellolibvirt/hellolibvirt
 /examples/openauth/openauth
+/examples/rename/rename
 /gnulib/lib/*
 /gnulib/m4/*
 /gnulib/tests/*
@@ -124,6 +125,7 @@
 /src/libvirt_access_lxc.xml
 /src/libvirt_access_qemu.syms
 /src/libvirt_access_qemu.xml
+/src/libvirt_admin.syms
 /src/libvirt_*.stp
 /src/libvirt_*helper
 /src/libvirt_*probes.h

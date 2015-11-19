@@ -1,7 +1,7 @@
 /*
  * domain_addr.c: helper APIs for managing domain device addresses
  *
- * Copyright (C) 2006-2014 Red Hat, Inc.
+ * Copyright (C) 2006-2015 Red Hat, Inc.
  * Copyright (C) 2006 Daniel P. Berrange
  *
  * This library is free software; you can redistribute it and/or
@@ -42,16 +42,27 @@ virDomainPCIAddressFlagsCompatible(virDevicePCIAddressPtr addr,
 {
     virErrorNumber errType = (fromConfig
                               ? VIR_ERR_XML_ERROR : VIR_ERR_INTERNAL_ERROR);
-    virDomainPCIConnectFlags flagsMatchMask = VIR_PCI_CONNECT_TYPES_MASK;
 
-    if (fromConfig)
-       flagsMatchMask |= VIR_PCI_CONNECT_TYPE_EITHER_IF_CONFIG;
+    if (fromConfig) {
+        /* If the requested connection was manually specified in
+         * config, allow a PCI device to connect to a PCIe slot, or
+         * vice versa.
+         */
+        if (busFlags & VIR_PCI_CONNECT_TYPES_ENDPOINT)
+            busFlags |= VIR_PCI_CONNECT_TYPES_ENDPOINT;
+        /* Also allow manual specification of bus to override
+         * libvirt's assumptions about whether or not hotplug
+         * capability will be required.
+         */
+        if (devFlags & VIR_PCI_CONNECT_HOTPLUGGABLE)
+            busFlags |= VIR_PCI_CONNECT_HOTPLUGGABLE;
+    }
 
     /* If this bus doesn't allow the type of connection (PCI
      * vs. PCIe) required by the device, or if the device requires
      * hot-plug and this bus doesn't have it, return false.
      */
-    if (!(devFlags & busFlags & flagsMatchMask)) {
+    if (!(devFlags & busFlags & VIR_PCI_CONNECT_TYPES_MASK)) {
         if (reportError) {
             if (devFlags & VIR_PCI_CONNECT_TYPE_PCI) {
                 virReportError(errType,
@@ -172,10 +183,9 @@ virDomainPCIAddressBusSetModel(virDomainPCIAddressBusPtr bus,
     case VIR_DOMAIN_CONTROLLER_MODEL_PCIE_ROOT:
         /* slots 1 - 31, no hotplug, PCIe only unless the address was
          * specified in user config *and* the particular device being
-         * attached also allows it
+         * attached also allows it.
          */
-        bus->flags = (VIR_PCI_CONNECT_TYPE_PCIE |
-                      VIR_PCI_CONNECT_TYPE_EITHER_IF_CONFIG);
+        bus->flags = VIR_PCI_CONNECT_TYPE_PCIE | VIR_PCI_CONNECT_TYPE_PCIE_ROOT;
         bus->minSlot = 1;
         bus->maxSlot = VIR_PCI_ADDRESS_SLOT_LAST;
         break;
@@ -185,6 +195,24 @@ virDomainPCIAddressBusSetModel(virDomainPCIAddressBusPtr bus,
         bus->flags = VIR_PCI_CONNECT_TYPE_PCI;
         bus->minSlot = 1;
         bus->maxSlot = VIR_PCI_ADDRESS_SLOT_LAST;
+        break;
+    case VIR_DOMAIN_CONTROLLER_MODEL_PCIE_ROOT_PORT:
+    case VIR_DOMAIN_CONTROLLER_MODEL_PCIE_SWITCH_DOWNSTREAM_PORT:
+        /* provides one slot which is pcie, can be used by devices
+         * that must connect to some type of "pcie-*-port", and
+         * is hotpluggable
+         */
+        bus->flags = VIR_PCI_CONNECT_TYPE_PCIE
+           | VIR_PCI_CONNECT_TYPE_PCIE_PORT
+           | VIR_PCI_CONNECT_HOTPLUGGABLE;
+        bus->minSlot = 0;
+        bus->maxSlot = 0;
+        break;
+    case VIR_DOMAIN_CONTROLLER_MODEL_PCIE_SWITCH_UPSTREAM_PORT:
+        /* 31 slots, can only accept pcie-switch-port, no hotplug */
+        bus->flags = VIR_PCI_CONNECT_TYPE_PCIE_SWITCH;
+        bus->minSlot = 0;
+        bus->maxSlot = 31;
         break;
     default:
         virReportError(VIR_ERR_INTERNAL_ERROR,
@@ -461,55 +489,66 @@ virDomainPCIAddressGetNextSlot(virDomainPCIAddressSetPtr addrs,
                                virDomainPCIConnectFlags flags)
 {
     /* default to starting the search for a free slot from
-     * 0000:00:00.0
+     * the first slot of domain 0 bus 0...
      */
     virDevicePCIAddress a = { 0, 0, 0, 0, false };
     char *addrStr = NULL;
-
-    /* except if this search is for the exact same type of device as
-     * last time, continue the search from the previous match
-     */
-    if (flags == addrs->lastFlags)
-        a = addrs->lastaddr;
 
     if (addrs->nbuses == 0) {
         virReportError(VIR_ERR_XML_ERROR, "%s", _("No PCI buses available"));
         goto error;
     }
 
-    /* Start the search at the last used bus and slot */
-    for (a.slot++; a.bus < addrs->nbuses; a.bus++) {
+    /* ...unless this search is for the exact same type of device as
+     * last time, then continue the search from the next slot after
+     * the previous match (the "next slot" may possibly be the first
+     * slot of the next bus).
+     */
+    if (flags == addrs->lastFlags) {
+        a = addrs->lastaddr;
+        if (++a.slot > addrs->buses[a.bus].maxSlot &&
+            ++a.bus < addrs->nbuses)
+            a.slot = addrs->buses[a.bus].minSlot;
+    } else {
+        a.slot = addrs->buses[0].minSlot;
+    }
+
+    while (a.bus < addrs->nbuses) {
+        VIR_FREE(addrStr);
         if (!(addrStr = virDomainPCIAddressAsString(&a)))
             goto error;
         if (!virDomainPCIAddressFlagsCompatible(&a, addrStr,
                                                 addrs->buses[a.bus].flags,
                                                 flags, false, false)) {
-            VIR_FREE(addrStr);
             VIR_DEBUG("PCI bus %.4x:%.2x is not compatible with the device",
                       a.domain, a.bus);
-            continue;
-        }
-        for (; a.slot <= VIR_PCI_ADDRESS_SLOT_LAST; a.slot++) {
-            if (!virDomainPCIAddressSlotInUse(addrs, &a))
-                goto success;
+        } else {
+            while (a.slot <= addrs->buses[a.bus].maxSlot) {
+                if (!virDomainPCIAddressSlotInUse(addrs, &a))
+                    goto success;
 
-            VIR_DEBUG("PCI slot %.4x:%.2x:%.2x already in use",
-                      a.domain, a.bus, a.slot);
+                VIR_DEBUG("PCI slot %.4x:%.2x:%.2x already in use",
+                          a.domain, a.bus, a.slot);
+                a.slot++;
+            }
         }
-        a.slot = 1;
-        VIR_FREE(addrStr);
+        if (++a.bus < addrs->nbuses)
+            a.slot = addrs->buses[a.bus].minSlot;
     }
 
     /* There were no free slots after the last used one */
     if (addrs->dryRun) {
-        /* a is already set to the first new bus and slot 1 */
+        /* a is already set to the first new bus */
         if (virDomainPCIAddressSetGrow(addrs, &a, flags) < 0)
             goto error;
+        /* this device will use the first slot of the new bus */
+        a.slot = addrs->buses[a.bus].minSlot;
         goto success;
     } else if (flags == addrs->lastFlags) {
         /* Check the buses from 0 up to the last used one */
         for (a.bus = 0; a.bus <= addrs->lastaddr.bus; a.bus++) {
-            addrStr = NULL;
+            a.slot = addrs->buses[a.bus].minSlot;
+            VIR_FREE(addrStr);
             if (!(addrStr = virDomainPCIAddressAsString(&a)))
                 goto error;
             if (!virDomainPCIAddressFlagsCompatible(&a, addrStr,
@@ -517,14 +556,15 @@ virDomainPCIAddressGetNextSlot(virDomainPCIAddressSetPtr addrs,
                                                     flags, false, false)) {
                 VIR_DEBUG("PCI bus %.4x:%.2x is not compatible with the device",
                           a.domain, a.bus);
-                continue;
-            }
-            for (a.slot = 1; a.slot <= VIR_PCI_ADDRESS_SLOT_LAST; a.slot++) {
-                if (!virDomainPCIAddressSlotInUse(addrs, &a))
-                    goto success;
+            } else {
+                while (a.slot <= addrs->buses[a.bus].maxSlot) {
+                    if (!virDomainPCIAddressSlotInUse(addrs, &a))
+                        goto success;
 
-                VIR_DEBUG("PCI slot %.4x:%.2x:%.2x already in use",
-                          a.domain, a.bus, a.slot);
+                    VIR_DEBUG("PCI slot %.4x:%.2x:%.2x already in use",
+                              a.domain, a.bus, a.slot);
+                    a.slot++;
+                }
             }
         }
     }

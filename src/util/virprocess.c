@@ -36,11 +36,11 @@
 # include <sched.h>
 #endif
 
-#if defined(__FreeBSD__) || HAVE_BSD_CPU_AFFINITY
+#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__) || HAVE_BSD_CPU_AFFINITY
 # include <sys/param.h>
 #endif
 
-#ifdef  __FreeBSD__
+#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
 # include <sys/sysctl.h>
 # include <sys/user.h>
 #endif
@@ -407,7 +407,7 @@ virProcessKillPainfully(pid_t pid, bool force)
 int virProcessSetAffinity(pid_t pid, virBitmapPtr map)
 {
     size_t i;
-    VIR_DEBUG("Set process affinity on %lld\n", (long long)pid);
+    VIR_DEBUG("Set process affinity on %lld", (long long)pid);
 # ifdef CPU_ALLOC
     /* New method dynamically allocates cpu mask, allowing unlimted cpus */
     int numcpus = 1024;
@@ -619,14 +619,16 @@ int virProcessGetPids(pid_t pid, size_t *npids, pid_t **pids)
         goto cleanup;
 
     while ((value = virDirRead(dir, &ent, taskPath)) > 0) {
+        long long tmp;
         pid_t tmp_pid;
 
         /* Skip . and .. */
         if (STRPREFIX(ent->d_name, "."))
             continue;
 
-        if (virStrToLong_i(ent->d_name, NULL, 10, &tmp_pid) < 0)
+        if (virStrToLong_ll(ent->d_name, NULL, 10, &tmp) < 0)
             goto cleanup;
+        tmp_pid = tmp;
 
         if (VIR_APPEND_ELEMENT(*pids, *npids, tmp_pid) < 0)
             goto cleanup;
@@ -703,6 +705,9 @@ int virProcessSetNamespaces(size_t nfdlist,
         return -1;
     }
     for (i = 0; i < nfdlist; i++) {
+        if (fdlist[i] < 0)
+            continue;
+
         /* We get EINVAL if new NS is same as the current
          * NS, or if the fd namespace doesn't match the
          * type passed to setns()'s second param. Since we
@@ -932,7 +937,7 @@ int virProcessGetStartTime(pid_t pid,
     VIR_FREE(buf);
     return ret;
 }
-#elif defined(__FreeBSD__)
+#elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
 int virProcessGetStartTime(pid_t pid,
                            unsigned long long *timestamp)
 {
