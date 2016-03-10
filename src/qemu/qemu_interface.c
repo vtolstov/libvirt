@@ -415,7 +415,6 @@ qemuExecuteEthernetScript(const char *ifname, const char *script)
         return ret;
 }
 
-
 /* qemuInterfaceEthernetConnect:
  * @def: the definition of the VM
  * @driver: qemu driver data
@@ -475,8 +474,44 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
     if (virNetDevSetMAC(net->ifname, &tapmac) < 0)
         goto cleanup;
 
-    if (virNetDevSetOnline(net->ifname, true) < 0)
-        goto cleanup;
+    for (j = 0; j < net->nips; j++) {
+        virDomainNetIpDefPtr ip = net->ips[j];
+        unsigned int prefix = (ip->prefix > 0) ? ip->prefix :
+                              VIR_SOCKET_ADDR_DEFAULT_PREFIX;
+        char *ipStr = virSocketAddrFormat(&ip->address);
+
+        VIR_DEBUG("Adding IP address '%s/%u' to '%s'",
+                  ipStr, ip->prefix, net->ifname);
+        if (virNetDevSetIPAddress(net->ifname, &ip->address, prefix) < 0) {
+            virReportError(VIR_ERR_SYSTEM_ERROR,
+                           _("Failed to set IP address '%s' on %s"),
+                           ipStr, net->ifname);
+            VIR_FREE(ipStr);
+            goto cleanup;
+        }
+        VIR_FREE(ipStr);
+    }
+
+    if (netDef->linkstate == VIR_DOMAIN_NET_INTERFACE_LINK_STATE_UP) {
+        if (virNetDevSetOnline(net->ifname, true) < 0)
+            goto cleanup;
+
+        /* Set the routes */
+        for (j = 0; j < net->nroutes; j++) {
+            virNetworkRouteDefPtr route = net->routes[j];
+
+            if (virNetDevAddRoute(net->ifname,
+                                  virNetworkRouteDefGetAddress(route),
+                                  virNetworkRouteDefGetPrefix(route),
+                                  virNetworkRouteDefGetGateway(route),
+                                  virNetworkRouteDefGetMetric(route)) < 0) {
+                goto cleanup;
+            }
+            VIR_FREE(toStr);
+            VIR_FREE(viaStr);
+        }
+
+    }
 
     if (net->script) {
         if (qemuExecuteEthernetScript(net->ifname, net->script) < 0)
@@ -508,6 +543,8 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
     }
     virObjectUnref(cfg);
 
+    VIR_FREE(toStr);
+    VIR_FREE(viaStr);
     return ret;
 }
 
