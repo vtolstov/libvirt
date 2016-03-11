@@ -158,10 +158,10 @@ virNetDaemonNew(void)
 
 int
 virNetDaemonAddServer(virNetDaemonPtr dmn,
-                      const char *serverName,
                       virNetServerPtr srv)
 {
     int ret = -1;
+    const char *serverName = virNetServerGetName(srv);
 
     virObjectLock(dmn);
 
@@ -187,7 +187,33 @@ virNetDaemonGetServer(virNetDaemonPtr dmn,
     srv = virObjectRef(virHashLookup(dmn->servers, serverName));
     virObjectUnlock(dmn);
 
+    if (!srv) {
+        virReportError(VIR_ERR_NO_SERVER,
+                       _("No server named '%s'"), serverName);
+    }
+
     return srv;
+}
+
+
+struct collectData {
+    virNetServerPtr **servers;
+    size_t nservers;
+};
+
+
+static int
+collectServers(void *payload,
+               const void *name ATTRIBUTE_UNUSED,
+               void *opaque)
+{
+    virNetServerPtr srv = virObjectRef(payload);
+    struct collectData *data = opaque;
+
+    if (!srv)
+        return -1;
+
+    return VIR_APPEND_ELEMENT(*data->servers, data->nservers, srv);
 }
 
 
@@ -197,33 +223,27 @@ virNetDaemonGetServer(virNetDaemonPtr dmn,
  * but not the items in it (similarly to virHashGetItems).
  */
 ssize_t
-virNetDaemonGetServerNames(virNetDaemonPtr dmn,
-                           const char ***servers)
+virNetDaemonGetServers(virNetDaemonPtr dmn,
+                       virNetServerPtr **servers)
 {
-    virHashKeyValuePairPtr items = NULL;
-    size_t nservers = 0;
+    struct collectData data = { servers, 0 };
     ssize_t ret = -1;
-    size_t i;
 
     *servers = NULL;
 
     virObjectLock(dmn);
 
-    items = virHashGetItems(dmn->servers, NULL);
-    if (!items)
+    if (virHashForEach(dmn->servers, collectServers, &data) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                       _("Cannot get all servers from daemon"));
         goto cleanup;
-
-    for (i = 0; items[i].key; i++) {
-        if (VIR_APPEND_ELEMENT(*servers, nservers, items[i].key) < 0)
-            goto cleanup;
     }
 
-    ret = nservers;
+    ret = data.nservers;
 
  cleanup:
     if (ret < 0)
-        VIR_FREE(*servers);
-    VIR_FREE(items);
+        virObjectListFreeCount(*servers, data.nservers);
     virObjectUnlock(dmn);
     return ret;
 }
@@ -276,6 +296,7 @@ virNetDaemonAddServerPostExec(virNetDaemonPtr dmn,
     }
 
     srv = virNetServerNewPostExecRestart(object,
+                                         serverName,
                                          clientPrivNew,
                                          clientPrivNewPostExecRestart,
                                          clientPrivPreExecRestart,
@@ -843,15 +864,23 @@ virNetDaemonClose(virNetDaemonPtr dmn)
 static int
 daemonServerHasClients(void *payload,
                        const void *key ATTRIBUTE_UNUSED,
-                       void *opaque ATTRIBUTE_UNUSED)
+                       void *opaque)
 {
+    bool *clients = opaque;
     virNetServerPtr srv = payload;
 
-    return virNetServerHasClients(srv);
+    if (virNetServerHasClients(srv))
+        *clients = true;
+
+    return 0;
 }
 
 bool
 virNetDaemonHasClients(virNetDaemonPtr dmn)
 {
-    return virHashForEach(dmn->servers, daemonServerHasClients, NULL) > 0;
+    bool ret = false;
+
+    virHashForEach(dmn->servers, daemonServerHasClients, &ret);
+
+    return ret;
 }

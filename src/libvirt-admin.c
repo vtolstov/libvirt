@@ -185,7 +185,7 @@ virAdmGetDefaultURI(virConfPtr conf)
 /**
  * virAdmConnectOpen:
  * @name: uri of the daemon to connect to, NULL for default
- * @flags: unused, must be 0
+ * @flags: extra flags; not used yet, so callers should always pass 0
  *
  * Opens connection to admin interface of the daemon.
  *
@@ -204,7 +204,7 @@ virAdmConnectOpen(const char *name, unsigned int flags)
 
     VIR_DEBUG("flags=%x", flags);
     virResetLastError();
-    virCheckFlags(VIR_CONNECT_NO_ALIASES, NULL);
+    virCheckFlagsGoto(VIR_CONNECT_NO_ALIASES, error);
 
     if (!(conn = virAdmConnectNew()))
         goto error;
@@ -371,11 +371,12 @@ virAdmConnectIsAlive(virAdmConnectPtr conn)
 
     VIR_DEBUG("conn=%p", conn);
 
+    virResetLastError();
+
     if (!conn)
         return 0;
 
     virCheckAdmConnectReturn(conn, -1);
-    virResetLastError();
 
     priv = conn->privateData;
     virObjectLock(priv);
@@ -588,6 +589,10 @@ int virAdmServerFree(virAdmServerPtr srv)
     VIR_DEBUG("server=%p", srv);
 
     virResetLastError();
+
+    if (!srv)
+        return 0;
+
     virCheckAdmServerReturn(srv, -1);
 
     virObjectUnref(srv);
@@ -599,7 +604,7 @@ int virAdmServerFree(virAdmServerPtr srv)
  * @conn: daemon connection reference
  * @servers: Pointer to a list to store an array containing objects or NULL
  *           if the list is not required (number of servers only)
- * @flags: bitwise-OR of virAdmConnectListServersFlags
+ * @flags: extra flags; not used yet, so callers should always pass 0
  *
  * Collect list of all servers provided by daemon the client is connected to.
  *
@@ -620,6 +625,7 @@ virAdmConnectListServers(virAdmConnectPtr conn,
     VIR_DEBUG("conn=%p, servers=%p, flags=%x", conn, servers, flags);
 
     virResetLastError();
+    virCheckFlagsGoto(0, error);
 
     if (servers)
         *servers = NULL;

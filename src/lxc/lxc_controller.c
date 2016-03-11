@@ -928,7 +928,8 @@ static int virLXCControllerSetupServer(virLXCControllerPtr ctrl)
                     LXC_STATE_DIR, ctrl->name) < 0)
         return -1;
 
-    if (!(srv = virNetServerNew(0, 0, 0, 1,
+    if (!(srv = virNetServerNew("LXC",
+                                0, 0, 0, 1,
                                 0, -1, 0,
                                 NULL,
                                 virLXCControllerClientPrivateNew,
@@ -967,7 +968,7 @@ static int virLXCControllerSetupServer(virLXCControllerPtr ctrl)
         goto error;
 
     if (!(ctrl->daemon = virNetDaemonNew()) ||
-        virNetDaemonAddServer(ctrl->daemon, "LXC", srv) < 0)
+        virNetDaemonAddServer(ctrl->daemon, srv) < 0)
         goto error;
 
     virNetDaemonUpdateServices(ctrl->daemon, true);

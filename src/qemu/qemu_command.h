@@ -32,6 +32,7 @@
 # include "qemu_domain.h"
 # include "qemu_domain_address.h"
 # include "qemu_capabilities.h"
+# include "logging/log_manager.h"
 
 /* Config type for XML import/export conversions */
 # define QEMU_CONFIG_FORMAT_ARGV "qemu-argv"
@@ -59,6 +60,7 @@ char *qemuBuildObjectCommandlineFromJSON(const char *type,
 
 virCommandPtr qemuBuildCommandLine(virConnectPtr conn,
                                    virQEMUDriverPtr driver,
+                                   virLogManagerPtr logManager,
                                    virDomainDefPtr def,
                                    virDomainChrSourceDefPtr monitor_chr,
                                    bool monitor_json,
@@ -74,8 +76,8 @@ virCommandPtr qemuBuildCommandLine(virConnectPtr conn,
                                    int **nicindexes,
                                    const char *domainLibDir,
                                    const char *domainChannelTargetDir)
-    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(10)
-    ATTRIBUTE_NONNULL(16) ATTRIBUTE_NONNULL(17);
+    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(11)
+    ATTRIBUTE_NONNULL(17) ATTRIBUTE_NONNULL(18);
 
 /* Generate '-device' string for chardev device */
 int
@@ -115,19 +117,15 @@ char *qemuBuildDriveStr(virConnectPtr conn,
                         virDomainDiskDefPtr disk,
                         bool bootable,
                         virQEMUCapsPtr qemuCaps);
-char *qemuBuildFSStr(virDomainFSDefPtr fs,
-                     virQEMUCapsPtr qemuCaps);
 
 /* Current, best practice */
-char *qemuBuildDriveDevStr(virDomainDefPtr def,
+char *qemuBuildDriveDevStr(const virDomainDef *def,
                            virDomainDiskDefPtr disk,
                            int bootindex,
                            virQEMUCapsPtr qemuCaps);
-char *qemuBuildFSDevStr(virDomainDefPtr domainDef,
-                        virDomainFSDefPtr fs,
-                        virQEMUCapsPtr qemuCaps);
+
 /* Current, best practice */
-char *qemuBuildControllerDevStr(virDomainDefPtr domainDef,
+char *qemuBuildControllerDevStr(const virDomainDef *domainDef,
                                 virDomainControllerDefPtr def,
                                 virQEMUCapsPtr qemuCaps,
                                 int *nusbcontroller);
@@ -183,7 +181,10 @@ int qemuBuildRNGBackendProps(virDomainRNGDefPtr rng,
 char *qemuBuildShmemDevStr(virDomainDefPtr def,
                            virDomainShmemDefPtr shmem,
                            virQEMUCapsPtr qemuCaps);
-char *qemuBuildShmemBackendStr(virDomainShmemDefPtr shmem,
+char *qemuBuildShmemBackendStr(virLogManagerPtr logManager,
+                               virCommandPtr cmd,
+                               virDomainDefPtr def,
+                               virDomainShmemDefPtr shmem,
                                virQEMUCapsPtr qemuCaps);
 
 
@@ -205,9 +206,6 @@ char *qemuBuildSCSIHostdevDevStr(virDomainDefPtr def,
                                  virDomainHostdevDefPtr dev,
                                  virQEMUCapsPtr qemuCaps);
 
-char *qemuBuildHubDevStr(virDomainDefPtr def,
-                         virDomainHubDefPtr dev,
-                         virQEMUCapsPtr qemuCaps);
 char *qemuBuildRedirdevDevStr(virDomainDefPtr def,
                               virDomainRedirdevDefPtr dev,
                               virQEMUCapsPtr qemuCaps);
@@ -223,7 +221,7 @@ int qemuCheckDiskConfig(virDomainDiskDefPtr disk);
 bool
 qemuCheckFips(void);
 
-bool qemuCheckCCWS390AddressSupport(virDomainDefPtr def,
+bool qemuCheckCCWS390AddressSupport(const virDomainDef *def,
                                     virDomainDeviceInfo info,
                                     virQEMUCapsPtr qemuCaps,
                                     const char *devicename);

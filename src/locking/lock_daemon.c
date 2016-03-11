@@ -160,7 +160,8 @@ virLockDaemonNew(virLockDaemonConfigPtr config, bool privileged)
         return NULL;
     }
 
-    if (!(srv = virNetServerNew(1, 1, 0, config->max_clients,
+    if (!(srv = virNetServerNew("virtlockd",
+                                1, 1, 0, config->max_clients,
                                 config->max_clients, -1, 0,
                                 NULL,
                                 virLockDaemonClientNew,
@@ -170,7 +171,7 @@ virLockDaemonNew(virLockDaemonConfigPtr config, bool privileged)
         goto error;
 
     if (!(lockd->dmn = virNetDaemonNew()) ||
-        virNetDaemonAddServer(lockd->dmn, "virtlockd", srv) < 0)
+        virNetDaemonAddServer(lockd->dmn, srv) < 0)
         goto error;
 
     if (!(lockd->lockspaces = virHashCreate(VIR_LOCK_DAEMON_NUM_LOCKSPACES,

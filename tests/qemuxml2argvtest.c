@@ -353,7 +353,7 @@ static int testCompareXMLToArgvFiles(const char *xml,
         testFailed = true;
 
     if (!testFailed &&
-        !(cmd = qemuBuildCommandLine(conn, &driver, vmdef, &monitor_chr,
+        !(cmd = qemuBuildCommandLine(conn, &driver, NULL, vmdef, &monitor_chr,
                                      (flags & FLAG_JSON), extraFlags,
                                      migrateURI, NULL,
                                      VIR_NETDEV_VPORT_PROFILE_OP_NO_OP,
@@ -1044,6 +1044,8 @@ mymain(void)
     DO_TEST("serial-pty", NONE);
     DO_TEST("serial-dev", NONE);
     DO_TEST("serial-file", NONE);
+    DO_TEST("serial-file-log", QEMU_CAPS_CHARDEV, QEMU_CAPS_CHARDEV_FILE_APPEND,
+            QEMU_CAPS_CHARDEV_LOGFILE);
     DO_TEST("serial-unix", NONE);
     DO_TEST("serial-tcp", NONE);
     DO_TEST("serial-udp", NONE);
@@ -1890,6 +1892,8 @@ mymain(void)
     DO_TEST_PARSE_FLAGS_ERROR("missing-machine",
                               VIR_DOMAIN_DEF_PARSE_SKIP_OSTYPE_CHECKS,
                               NONE);
+
+    DO_TEST("debug-threads", QEMU_CAPS_NAME_DEBUG_THREADS);
 
     qemuTestDriverFree(&driver);
 

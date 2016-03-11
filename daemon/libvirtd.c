@@ -1382,7 +1382,8 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
-    if (!(srv = virNetServerNew(config->min_workers,
+    if (!(srv = virNetServerNew("libvirtd",
+                                config->min_workers,
                                 config->max_workers,
                                 config->prio_workers,
                                 config->max_clients,
@@ -1399,7 +1400,7 @@ int main(int argc, char **argv) {
     }
 
     if (!(dmn = virNetDaemonNew()) ||
-        virNetDaemonAddServer(dmn, "libvirtd", srv) < 0) {
+        virNetDaemonAddServer(dmn, srv) < 0) {
         ret = VIR_DAEMON_ERR_INIT;
         goto cleanup;
     }
@@ -1456,7 +1457,8 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
-    if (!(srvAdm = virNetServerNew(config->admin_min_workers,
+    if (!(srvAdm = virNetServerNew("admin",
+                                   config->admin_min_workers,
                                    config->admin_max_workers,
                                    0,
                                    config->admin_max_clients,
@@ -1472,7 +1474,7 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
-    if (virNetDaemonAddServer(dmn, "admin", srvAdm) < 0) {
+    if (virNetDaemonAddServer(dmn, srvAdm) < 0) {
         ret = VIR_DAEMON_ERR_INIT;
         goto cleanup;
     }

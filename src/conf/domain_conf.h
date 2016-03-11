@@ -1204,6 +1204,8 @@ struct _virDomainChrSourceDef {
             char *channel;
         } spiceport;
     } data;
+    char *logfile;
+    int logappend;
 };
 
 /* A complete character device, both host and domain views.  */
@@ -2520,7 +2522,7 @@ int virDomainDiskSetDriver(virDomainDiskDefPtr def, const char *name)
     ATTRIBUTE_RETURN_CHECK;
 int virDomainDiskGetFormat(virDomainDiskDefPtr def);
 void virDomainDiskSetFormat(virDomainDiskDefPtr def, int format);
-int virDomainDeviceFindControllerModel(virDomainDefPtr def,
+int virDomainDeviceFindControllerModel(const virDomainDef *def,
                                        virDomainDeviceInfoPtr info,
                                        int controllerType);
 virDomainDiskDefPtr virDomainDiskFindByBusAndDst(virDomainDefPtr def,
@@ -2703,7 +2705,7 @@ bool virDomainDefCheckABIStability(virDomainDefPtr src,
 
 int virDomainDefAddImplicitControllers(virDomainDefPtr def);
 
-virDomainIOThreadIDDefPtr virDomainIOThreadIDFind(virDomainDefPtr def,
+virDomainIOThreadIDDefPtr virDomainIOThreadIDFind(const virDomainDef *def,
                                                   unsigned int iothread_id);
 virDomainIOThreadIDDefPtr virDomainIOThreadIDAdd(virDomainDefPtr def,
                                                  unsigned int iothread_id);
@@ -2833,12 +2835,12 @@ int virDomainControllerInsert(virDomainDefPtr def,
     ATTRIBUTE_RETURN_CHECK;
 void virDomainControllerInsertPreAlloced(virDomainDefPtr def,
                                          virDomainControllerDefPtr controller);
-int virDomainControllerFind(virDomainDefPtr def, int type, int idx);
+int virDomainControllerFind(const virDomainDef *def, int type, int idx);
 int virDomainControllerFindByType(virDomainDefPtr def, int type);
 int virDomainControllerFindByPCIAddress(virDomainDefPtr def,
                                         virDevicePCIAddressPtr addr);
 virDomainControllerDefPtr virDomainControllerRemove(virDomainDefPtr def, size_t i);
-const char *virDomainControllerAliasFind(virDomainDefPtr def,
+const char *virDomainControllerAliasFind(const virDomainDef *def,
                                          int type, int idx)
     ATTRIBUTE_NONNULL(1);
 

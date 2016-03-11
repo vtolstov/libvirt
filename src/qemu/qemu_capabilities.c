@@ -319,6 +319,8 @@ VIR_ENUM_IMPL(virQEMUCaps, QEMU_CAPS_LAST,
               "qxl.vram64_size_mb",
 
               "qxl-vga.vram64_size_mb", /* 215 */
+              "chardev-logfile",
+              "debug-threads",
     );
 
 
@@ -2634,6 +2636,8 @@ static struct virQEMUCapsCommandLineProps virQEMUCapsCommandLine[] = {
     { "machine", "dea-key-wrap", QEMU_CAPS_DEA_KEY_WRAP },
     { "chardev", "append", QEMU_CAPS_CHARDEV_FILE_APPEND },
     { "spice", "gl", QEMU_CAPS_SPICE_GL },
+    { "chardev", "logfile", QEMU_CAPS_CHARDEV_LOGFILE },
+    { "name", "debug-threads", QEMU_CAPS_NAME_DEBUG_THREADS },
 };
 
 static int
