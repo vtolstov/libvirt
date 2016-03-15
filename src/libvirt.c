@@ -319,7 +319,7 @@ virTLSMutexUnlock(void **priv)
     return 0;
 }
 
-
+#if GNUTLS_VERSION_NUMBER >= 0x030201
 static struct gcry_thread_cbs virTLSThreadImpl = {
     /* GCRY_THREAD_OPTION_VERSION was added in gcrypt 1.4.2 */
 # ifdef GCRY_THREAD_OPTION_VERSION
@@ -335,7 +335,7 @@ static struct gcry_thread_cbs virTLSThreadImpl = {
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 };
 #endif /* WITH_GNUTLS_GCRYPT */
-
+#endif
 
 static bool virGlobalError;
 static virOnceControl virGlobalOnce = VIR_ONCE_CONTROL_INITIALIZER;
