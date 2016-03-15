@@ -274,6 +274,7 @@ winsock_init(void)
 
 
 #ifdef WITH_GNUTLS_GCRYPT
+# if GCRYPT_VERSION_NUMBER < 0x010600
 static int
 virTLSMutexInit(void **priv)
 {
@@ -318,8 +319,9 @@ virTLSMutexUnlock(void **priv)
     virMutexUnlock(lock);
     return 0;
 }
+#endif
 
-#if GNUTLS_VERSION_NUMBER >= 0x030201
+# if GCRYPT_VERSION_NUMBER < 0x010600
 static struct gcry_thread_cbs virTLSThreadImpl = {
     /* GCRY_THREAD_OPTION_VERSION was added in gcrypt 1.4.2 */
 # ifdef GCRY_THREAD_OPTION_VERSION
