@@ -430,9 +430,10 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
                            virQEMUDriverPtr driver,
                            virDomainNetDefPtr net,
                            int *tapfd,
-                           size_t *tapfdSize)
+                           size_t tapfdSize)
 {
     virMacAddr tapmac;
+    size_t j;
     int ret = -1;
     unsigned int tap_create_flags = VIR_NETDEV_TAP_CREATE_IFUP;
     bool template_ifname = false;
@@ -492,7 +493,7 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
         VIR_FREE(ipStr);
     }
 
-    if (netDef->linkstate == VIR_DOMAIN_NET_INTERFACE_LINK_STATE_UP) {
+    if (net->linkstate == VIR_DOMAIN_NET_INTERFACE_LINK_STATE_UP) {
         if (virNetDevSetOnline(net->ifname, true) < 0)
             goto cleanup;
 
@@ -507,10 +508,7 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
                                   virNetworkRouteDefGetMetric(route)) < 0) {
                 goto cleanup;
             }
-            VIR_FREE(toStr);
-            VIR_FREE(viaStr);
         }
-
     }
 
     if (net->script) {
