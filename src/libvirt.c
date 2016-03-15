@@ -361,6 +361,7 @@ virGlobalInit(void)
 #endif
 
 #ifdef WITH_GNUTLS_GCRYPT
+    # if GCRYPT_VERSION_NUMBER < 0x010600
     /*
      * This sequence of API calls it copied exactly from
      * gnutls 2.12.23 source lib/gcrypt/init.c, with
@@ -374,6 +375,7 @@ virGlobalInit(void)
         gcry_control(GCRYCTL_DISABLE_SECMEM, NULL, 0);
         gcry_control(GCRYCTL_INITIALIZATION_FINISHED, NULL, 0);
     }
+    # endif
 #endif
 
     virLogSetFromEnv();
