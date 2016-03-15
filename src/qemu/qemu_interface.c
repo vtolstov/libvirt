@@ -541,8 +541,6 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
     }
     virObjectUnref(cfg);
 
-    VIR_FREE(toStr);
-    VIR_FREE(viaStr);
     return ret;
 }
 
