@@ -1456,7 +1456,7 @@ virNetworkIPDefParseXML(const char *networkName,
      */
 
     xmlNodePtr cur, save;
-    char *address = NULL, *netmask = NULL;
+    char *address = NULL, *netmask = NULL, *peer = NULL;
     unsigned long prefix = 0;
     int prefixRc;
     int result = -1;
@@ -1502,6 +1502,14 @@ virNetworkIPDefParseXML(const char *networkName,
     else
         def->prefix = prefix;
 
+    peer = virXPathString("string(./@peer)", ctxt);
+    if (peer && (virSocketAddrParse(&def->peer, peer, AF_UNSPEC) < 0)) {
+        virReportError(VIR_ERR_XML_ERROR,
+                       _("Invalid peer '%s' in network '%s'"),
+                       netmask, networkName);
+        goto cleanup;
+    }
+
     /* validate address, etc. for each family */
     if ((def->family == NULL) || (STREQ(def->family, "ipv4"))) {
         if (!(VIR_SOCKET_ADDR_IS_FAMILY(&def->address, AF_INET) ||
@@ -1531,6 +1539,14 @@ virNetworkIPDefParseXML(const char *networkName,
                            prefix, networkName);
             goto cleanup;
         }
+        if (peer) {
+            if (!VIR_SOCKET_ADDR_IS_FAMILY(&def->peer, AF_INET4)) {
+                virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                               _("Family 'ipv4' specified for non-IPv4 address '%s' in network '%s'"),
+                               peer, networkName);
+                goto cleanup;
+            }
+        }
     } else if (STREQ(def->family, "ipv6")) {
         if (!VIR_SOCKET_ADDR_IS_FAMILY(&def->address, AF_INET6)) {
             virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
@@ -1549,6 +1565,14 @@ virNetworkIPDefParseXML(const char *networkName,
                            _("Invalid IPv6 prefix '%lu' in network '%s'"),
                            prefix, networkName);
             goto cleanup;
+        }
+        if (peer) {
+            if (!VIR_SOCKET_ADDR_IS_FAMILY(&def->peer, AF_INET6)) {
+                virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                               _("Family 'ipv6' specified for non-IPv6 address '%s' in network '%s'"),
+                               peer, networkName);
+                goto cleanup;
+            }
         }
     } else {
         virReportError(VIR_ERR_XML_ERROR,
