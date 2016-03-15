@@ -44,7 +44,7 @@ int qemuInterfaceEthernetConnect(virDomainDefPtr def,
                                virQEMUDriverPtr driver,
                                virDomainNetDefPtr net,
                                int *tapfd,
-                               size_t *tapfdSize);
+                               size_t tapfdSize);
 
 int qemuInterfaceBridgeConnect(virDomainDefPtr def,
                                virQEMUDriverPtr driver,
