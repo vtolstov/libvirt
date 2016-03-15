@@ -1540,7 +1540,7 @@ virNetworkIPDefParseXML(const char *networkName,
             goto cleanup;
         }
         if (peer) {
-            if (!VIR_SOCKET_ADDR_IS_FAMILY(&def->peer, AF_INET4)) {
+            if (!VIR_SOCKET_ADDR_IS_FAMILY(&def->peer, AF_INET)) {
                 virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
                                _("Family 'ipv4' specified for non-IPv4 address '%s' in network '%s'"),
                                peer, networkName);
