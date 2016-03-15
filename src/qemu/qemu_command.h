@@ -82,7 +82,7 @@ virCommandPtr qemuBuildCommandLine(virConnectPtr conn,
 /* Generate '-device' string for chardev device */
 int
 qemuBuildChrDeviceStr(char **deviceStr,
-                      virDomainDefPtr vmdef,
+                      const virDomainDef *vmdef,
                       virDomainChrDefPtr chr,
                       virQEMUCapsPtr qemuCaps);
 
@@ -130,21 +130,9 @@ char *qemuBuildControllerDevStr(const virDomainDef *domainDef,
                                 virQEMUCapsPtr qemuCaps,
                                 int *nusbcontroller);
 
-char *qemuBuildWatchdogDevStr(virDomainDefPtr domainDef,
-                              virDomainWatchdogDefPtr dev,
-                              virQEMUCapsPtr qemuCaps);
-
-char *qemuBuildMemballoonDevStr(virDomainDefPtr domainDef,
+char *qemuBuildMemballoonDevStr(const virDomainDef *domainDef,
                                 virDomainMemballoonDefPtr dev,
                                 virQEMUCapsPtr qemuCaps);
-
-char *qemuBuildUSBInputDevStr(virDomainDefPtr domainDef,
-                              virDomainInputDefPtr dev,
-                              virQEMUCapsPtr qemuCaps);
-
-char *qemuBuildSoundDevStr(virDomainDefPtr domainDef,
-                           virDomainSoundDefPtr sound,
-                           virQEMUCapsPtr qemuCaps);
 
 int qemuBuildMemoryBackendStr(unsigned long long size,
                               unsigned long long pagesize,
@@ -160,17 +148,14 @@ int qemuBuildMemoryBackendStr(unsigned long long size,
 
 char *qemuBuildMemoryDeviceStr(virDomainMemoryDefPtr mem);
 
-/* Legacy, pre device support */
-char *qemuBuildPCIHostdevPCIDevStr(virDomainHostdevDefPtr dev,
-                                   virQEMUCapsPtr qemuCaps);
 /* Current, best practice */
-char *qemuBuildPCIHostdevDevStr(virDomainDefPtr def,
+char *qemuBuildPCIHostdevDevStr(const virDomainDef *def,
                                 virDomainHostdevDefPtr dev,
                                 int bootIndex,
                                 const char *configfd,
                                 virQEMUCapsPtr qemuCaps);
 
-char *qemuBuildRNGDevStr(virDomainDefPtr def,
+char *qemuBuildRNGDevStr(const virDomainDef *def,
                          virDomainRNGDefPtr dev,
                          virQEMUCapsPtr qemuCaps);
 int qemuBuildRNGBackendProps(virDomainRNGDefPtr rng,
@@ -190,10 +175,8 @@ char *qemuBuildShmemBackendStr(virLogManagerPtr logManager,
 
 int qemuOpenPCIConfig(virDomainHostdevDefPtr dev);
 
-/* Legacy, pre device support */
-char *qemuBuildUSBHostdevUSBDevStr(virDomainHostdevDefPtr dev);
 /* Current, best practice */
-char *qemuBuildUSBHostdevDevStr(virDomainDefPtr def,
+char *qemuBuildUSBHostdevDevStr(const virDomainDef *def,
                                 virDomainHostdevDefPtr dev,
                                 virQEMUCapsPtr qemuCaps);
 
@@ -202,11 +185,11 @@ char *qemuBuildSCSIHostdevDrvStr(virConnectPtr conn,
                                  virQEMUCapsPtr qemuCaps,
                                  qemuBuildCommandLineCallbacksPtr callbacks)
     ATTRIBUTE_NONNULL(4);
-char *qemuBuildSCSIHostdevDevStr(virDomainDefPtr def,
+char *qemuBuildSCSIHostdevDevStr(const virDomainDef *def,
                                  virDomainHostdevDefPtr dev,
                                  virQEMUCapsPtr qemuCaps);
 
-char *qemuBuildRedirdevDevStr(virDomainDefPtr def,
+char *qemuBuildRedirdevDevStr(const virDomainDef *def,
                               virDomainRedirdevDefPtr dev,
                               virQEMUCapsPtr qemuCaps);
 
