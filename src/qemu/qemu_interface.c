@@ -462,7 +462,7 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
     if (net->model && STREQ(net->model, "virtio"))
         tap_create_flags |= VIR_NETDEV_TAP_CREATE_VNET_HDR;
 
-    if (virNetDevTapCreate(&net->ifname, tunpath, tapfd, *tapfdSize,
+    if (virNetDevTapCreate(&net->ifname, tunpath, tapfd, tapfdSize,
                            tap_create_flags) < 0) {
         virDomainAuditNetDevice(def, net, tunpath, false);
         goto cleanup;
@@ -534,7 +534,7 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
  cleanup:
     if (ret < 0) {
         size_t i;
-        for (i = 0; i < *tapfdSize && tapfd[i] >= 0; i++)
+        for (i = 0; i < tapfdSize && tapfd[i] >= 0; i++)
             VIR_FORCE_CLOSE(tapfd[i]);
         if (template_ifname)
             VIR_FREE(net->ifname);
