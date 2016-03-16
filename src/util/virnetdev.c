@@ -1086,7 +1086,7 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
         goto buffer_too_small;
 
     if (peerData) {
-        if (nla_put(nlmsg, IFA_ADDRESS, peerDataLen, peerData) < 0)
+        if (nla_put(nlmsg, IFA_ADDRESS, addrDataLen, peerData) < 0)
             goto buffer_too_small;
     } else if (broadcastData) {
         if (nla_put(nlmsg, IFA_BROADCAST, addrDataLen, broadcastData) < 0)
