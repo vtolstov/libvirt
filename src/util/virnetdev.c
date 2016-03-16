@@ -1046,7 +1046,7 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
     struct ifaddrmsg ifa;
     unsigned int ifindex;
     void *addrData = NULL;
-    void *peerDdata = NULL;
+    void *peerData = NULL;
     void *broadcastData = NULL;
     size_t addrDataLen;
     size_t peerDataLen;
