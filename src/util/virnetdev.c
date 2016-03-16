@@ -1081,13 +1081,16 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
     if (nlmsg_append(nlmsg, &ifa, sizeof(ifa), NLMSG_ALIGNTO) < 0)
         goto buffer_too_small;
 
-    if (nla_put(nlmsg, IFA_LOCAL, addrDataLen, addrData) < 0)
-        goto buffer_too_small;
-
     if (peerData) {
         if (nla_put(nlmsg, IFA_ADDRESS, peerDataLen, peerData) < 0)
             goto buffer_too_small;
+
+        if (nla_put(nlmsg, IFA_LOCAL, addrDataLen, addrData) < 0)
+            goto buffer_too_small;
     } else {
+        if (nla_put(nlmsg, IFA_LOCAL, addrDataLen, addrData) < 0)
+            goto buffer_too_small;
+
         if (nla_put(nlmsg, IFA_ADDRESS, addrDataLen, addrData) < 0)
             goto buffer_too_small;
 
