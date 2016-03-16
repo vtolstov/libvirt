@@ -1086,9 +1086,15 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
         goto buffer_too_small;
 
     if (peerData) {
+        virReportError(VIR_ERR_SYSTEM_ERROR,
+                       ("peerdata on %s"), ifname);
+
         if (nla_put(nlmsg, IFA_ADDRESS, addrDataLen, peerData) < 0)
             goto buffer_too_small;
     } else if (broadcastData) {
+        virReportError(VIR_ERR_SYSTEM_ERROR,
+                       ("broadcastdataon %s"), ifname);
+
         if (nla_put(nlmsg, IFA_BROADCAST, addrDataLen, broadcastData) < 0)
             goto buffer_too_small;
     }
