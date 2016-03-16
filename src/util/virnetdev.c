@@ -1039,16 +1039,22 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
                                      const char *ifname,
                                      virSocketAddr *addr,
                                      unsigned int prefix,
-                                     virSocketAddr *broadcast)
+                                     virSocketAddr *broadcast,
+                                     virSocketAddr *peer)
 {
     struct nl_msg *nlmsg = NULL;
     struct ifaddrmsg ifa;
     unsigned int ifindex;
     void *addrData = NULL;
+    void *peerDdata = NULL;
     void *broadcastData = NULL;
     size_t addrDataLen;
+    size_t peerDataLen;
 
     if (virNetDevGetIPAddressBinary(addr, &addrData, &addrDataLen) < 0)
+        return NULL;
+
+    if (peer && virNetDevGetIPAddressBinary(peer, &peerData, &peerDataLen) < 0)
         return NULL;
 
     if (broadcast && virNetDevGetIPAddressBinary(broadcast, &broadcastData,
@@ -1078,12 +1084,17 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
     if (nla_put(nlmsg, IFA_LOCAL, addrDataLen, addrData) < 0)
         goto buffer_too_small;
 
-    if (nla_put(nlmsg, IFA_ADDRESS, addrDataLen, addrData) < 0)
-        goto buffer_too_small;
+    if (peerData) {
+        if (nla_put(nlmsg, IFA_ADDRESS, peerDataLen, peerData) < 0)
+            goto buffer_too_small;
+    } else {
+        if (nla_put(nlmsg, IFA_ADDRESS, addrDataLen, addrData) < 0)
+            goto buffer_too_small;
 
-    if (broadcastData &&
-        nla_put(nlmsg, IFA_BROADCAST, addrDataLen, broadcastData) < 0)
-        goto buffer_too_small;
+        if (broadcastData &&
+            nla_put(nlmsg, IFA_BROADCAST, addrDataLen, broadcastData) < 0)
+            goto buffer_too_small;
+    }
 
     return nlmsg;
 
@@ -1098,6 +1109,7 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
  * virNetDevSetIPAddress:
  * @ifname: the interface name
  * @addr: the IP address (IPv4 or IPv6)
+ * @peer: The IP address of peer (IPv4 or IPv6)
  * @prefix: number of 1 bits in the netmask
  *
  * Add an IP address to an interface. This function *does not* remove
@@ -1108,6 +1120,7 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
  */
 int virNetDevSetIPAddress(const char *ifname,
                           virSocketAddr *addr,
+                          virSocketAddr *peer,
                           unsigned int prefix)
 {
     virSocketAddr *broadcast = NULL;
@@ -1129,7 +1142,7 @@ int virNetDevSetIPAddress(const char *ifname,
 
     if (!(nlmsg = virNetDevCreateNetlinkAddressMessage(RTM_NEWADDR, ifname,
                                                        addr, prefix,
-                                                       broadcast)))
+                                                       broadcast, peer)))
         goto cleanup;
 
     if (virNetlinkCommand(nlmsg, &resp, &recvbuflen, 0, 0,
@@ -1288,7 +1301,7 @@ int virNetDevClearIPAddress(const char *ifname,
 
     if (!(nlmsg = virNetDevCreateNetlinkAddressMessage(RTM_DELADDR, ifname,
                                                        addr, prefix,
-                                                       NULL)))
+                                                       NULL, NULL)))
         goto cleanup;
 
     if (virNetlinkCommand(nlmsg, &resp, &recvbuflen, 0, 0,
@@ -1423,10 +1436,11 @@ virNetDevWaitDadFinish(virSocketAddrPtr *addrs, size_t count)
 
 int virNetDevSetIPAddress(const char *ifname,
                           virSocketAddr *addr,
+                          virSocketAddr *peer,
                           unsigned int prefix)
 {
     virCommandPtr cmd = NULL;
-    char *addrstr = NULL, *bcaststr = NULL;
+    char *addrstr = NULL, *bcaststr = NULL, *peerstr = NULL;
     virSocketAddr broadcast;
     int ret = -1;
 
@@ -1453,6 +1467,8 @@ int virNetDevSetIPAddress(const char *ifname,
     cmd = virCommandNew(IP_PATH);
     virCommandAddArgList(cmd, "addr", "add", NULL);
     virCommandAddArgFormat(cmd, "%s/%u", addrstr, prefix);
+    if (peerstr)
+        virCommandAddArgList(cmd, "peer", peerstr, NULL);
     if (bcaststr)
         virCommandAddArgList(cmd, "broadcast", bcaststr, NULL);
     virCommandAddArgList(cmd, "dev", ifname, NULL);
@@ -1465,6 +1481,7 @@ int virNetDevSetIPAddress(const char *ifname,
  cleanup:
     VIR_FREE(addrstr);
     VIR_FREE(bcaststr);
+    VIR_FREE(peerstr);
     virCommandFree(cmd);
     return ret;
 }

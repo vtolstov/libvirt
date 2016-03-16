@@ -483,7 +483,7 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
 
         VIR_DEBUG("Adding IP address '%s/%u' to '%s'",
                   ipStr, ip->prefix, net->ifname);
-        if (virNetDevSetIPAddress(net->ifname, &ip->address, prefix) < 0) {
+        if (virNetDevSetIPAddress(net->ifname, &ip->address, &ip->peer, prefix) < 0) {
             virReportError(VIR_ERR_SYSTEM_ERROR,
                            _("Failed to set IP address '%s' on %s"),
                            ipStr, net->ifname);

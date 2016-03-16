@@ -3915,6 +3915,7 @@ typedef virDomainIPAddress *virDomainIPAddressPtr;
 struct _virDomainInterfaceIPAddress {
     int type;                /* virIPAddrType */
     char *addr;              /* IP address */
+    char *peer;              /* IP peer */
     unsigned int prefix;     /* IP address prefix */
 };
 
