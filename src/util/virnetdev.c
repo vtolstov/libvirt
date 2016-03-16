@@ -1049,17 +1049,18 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
     void *peerData = NULL;
     void *broadcastData = NULL;
     size_t addrDataLen;
-    size_t peerDataLen;
 
     if (virNetDevGetIPAddressBinary(addr, &addrData, &addrDataLen) < 0)
         return NULL;
 
-    if (peer && virNetDevGetIPAddressBinary(peer, &peerData, &peerDataLen) < 0)
-        return NULL;
-
-    if (broadcast && virNetDevGetIPAddressBinary(broadcast, &broadcastData,
-                                                 &addrDataLen) < 0)
-        return NULL;
+    if (peer) {
+        if (virNetDevGetIPAddressBinary(peer, &peerData, &addrDataLen) < 0)
+            return NULL;
+    } else if (broadcast) {
+        if (virNetDevGetIPAddressBinary(broadcast, &broadcastData,
+                                        &addrDataLen) < 0)
+            return NULL;
+    }
 
     /* Get the interface index */
     if ((ifindex = if_nametoindex(ifname)) == 0)
@@ -1081,24 +1082,14 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
     if (nlmsg_append(nlmsg, &ifa, sizeof(ifa), NLMSG_ALIGNTO) < 0)
         goto buffer_too_small;
 
+    if (nla_put(nlmsg, IFA_LOCAL, addrDataLen, addrData) < 0)
+        goto buffer_too_small;
+
     if (peerData) {
-        if (nla_put(nlmsg, IFA_LOCAL, addrDataLen, addrData) < 0)
-            goto buffer_too_small;
-
         if (nla_put(nlmsg, IFA_ADDRESS, peerDataLen, peerData) < 0)
             goto buffer_too_small;
-
-        if (nla_put(nlmsg, IFA_ADDRESS, peerDataLen, peerData) < 0)
-            goto buffer_too_small;
-    } else {
-        if (nla_put(nlmsg, IFA_LOCAL, addrDataLen, addrData) < 0)
-            goto buffer_too_small;
-
-        if (nla_put(nlmsg, IFA_ADDRESS, addrDataLen, addrData) < 0)
-            goto buffer_too_small;
-
-        if (broadcastData &&
-            nla_put(nlmsg, IFA_BROADCAST, addrDataLen, broadcastData) < 0)
+    } else if (broadcastData) {
+        if (nla_put(nlmsg, IFA_BROADCAST, addrDataLen, broadcastData) < 0)
             goto buffer_too_small;
     }
 
