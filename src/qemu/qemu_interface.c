@@ -480,33 +480,18 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
         unsigned int prefix = (ip->prefix > 0) ? ip->prefix :
                               VIR_SOCKET_ADDR_DEFAULT_PREFIX;
         char *ipStr = virSocketAddrFormat(&ip->address);
-        if (ip->peer) {
-            char *peerStr = virSocketAddrFormat(&ip->peer);
-        }
-        if (ip->peer) {
-            VIR_DEBUG("Adding IP address '%s' peer '%s/%u' to '%s'",
-                      ipStr, peerStr, ip->prefix, net->ifname);
-        } else {
-            VIR_DEBUG("Adding IP address '%s/%u' to '%s'",
-                      ipStr, ip->prefix, net->ifname);
-        }
+
+        VIR_DEBUG("Adding IP address '%s/%u' to '%s'",
+                  ipStr, ip->prefix, net->ifname);
+
         if (virNetDevSetIPAddress(net->ifname, &ip->address, &ip->peer, prefix) < 0) {
-            if (ip->peer) {
-                virReportError(VIR_ERR_SYSTEM_ERROR,
-                               _("Failed to set IP address '%s' peer '%s/%u' on %s"),
-                               ipStr, peerStr, ip->prefix, net->ifname);
-                VIR_FREE(peerStr);
-            } else {
-                virReportError(VIR_ERR_SYSTEM_ERROR,
-                               _("Failed to set IP address '%s' on %s"),
-                               ipStr, net->ifname);
-            }
+            virReportError(VIR_ERR_SYSTEM_ERROR,
+                           _("Failed to set IP address '%s' on %s"),
+                           ipStr, net->ifname);
             VIR_FREE(ipStr);
             goto cleanup;
         }
         VIR_FREE(ipStr);
-        if (ip->peer)
-            VIR_FREE(peerStr);
     }
 
     if (net->linkstate == VIR_DOMAIN_NET_INTERFACE_LINK_STATE_UP ||
