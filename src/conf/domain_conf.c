@@ -5725,8 +5725,7 @@ virDomainNetIpParseXML(xmlNodePtr node)
     unsigned int prefixValue = 0;
     char *familyStr = NULL;
     int family = AF_UNSPEC;
-    char *address = NULL;
-    char *peer = NULL;
+    char *address = NULL, *peer = NULL;
 
     if (!(prefixStr = virXMLPropString(node, "prefix")) ||
         (virStrToLong_ui(prefixStr, NULL, 10, &prefixValue) < 0)) {
@@ -5740,9 +5739,8 @@ virDomainNetIpParseXML(xmlNodePtr node)
         goto cleanup;
     }
 
-    if ((peer = virXMLPropString(node, "peer")) == NULL) {
+    if ((peer = virXMLPropString(node, "peer")) == NULL)
         VIR_DEBUG("Peer is empty");
-    }
 
     familyStr = virXMLPropString(node, "family");
     if (familyStr && STREQ(familyStr, "ipv4"))
@@ -5762,13 +5760,13 @@ virDomainNetIpParseXML(xmlNodePtr node)
         goto cleanup;
     }
 
-    if (peer != NULL && virSocketAddrParse(&ip->peer, peer, family) < 0) {
+    if ((peer != NULL) && (virSocketAddrParse(&ip->peer, peer, family) < 0)) {
             virReportError(VIR_ERR_INVALID_ARG,
                            _("Failed to parse IP address: '%s'"),
                            peer);
             goto cleanup;
-        }
     }
+
     ip->prefix = prefixValue;
 
     ret = ip;
