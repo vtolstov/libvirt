@@ -5740,7 +5740,9 @@ virDomainNetIpParseXML(xmlNodePtr node)
         goto cleanup;
     }
 
-    peer = virXMLPropString(node, "peer");
+    if ((peer = virXMLPropString(node, "peer")) == NULL) {
+        VIR_DEBUG("Peer is empty");
+    }
 
     familyStr = virXMLPropString(node, "family");
     if (familyStr && STREQ(familyStr, "ipv4"))
@@ -5759,8 +5761,8 @@ virDomainNetIpParseXML(xmlNodePtr node)
                        address);
         goto cleanup;
     }
-    if (peer) {
-        if (virSocketAddrParse(&ip->peer, peer, family) < 0) {
+
+    if (peer != NULL && virSocketAddrParse(&ip->peer, peer, family) < 0) {
             virReportError(VIR_ERR_INVALID_ARG,
                            _("Failed to parse IP address: '%s'"),
                            peer);
