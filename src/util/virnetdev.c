@@ -1093,10 +1093,13 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
             goto buffer_too_small;
     } else if (broadcastData) {
         virReportError(VIR_ERR_SYSTEM_ERROR,
-                       ("broadcastdataon %s"), ifname);
+                       ("broadcastdata on %s"), ifname);
 
         if (nla_put(nlmsg, IFA_BROADCAST, addrDataLen, broadcastData) < 0)
             goto buffer_too_small;
+    } else {
+        virReportError(VIR_ERR_SYSTEM_ERROR,
+                       ("AAAA on %s"), ifname);
     }
 
     return nlmsg;
@@ -1134,7 +1137,10 @@ int virNetDevSetIPAddress(const char *ifname,
 
 
     /* The caller needs to provide a correct address */
-    if (VIR_SOCKET_ADDR_FAMILY(addr) == AF_INET) {
+    if (VIR_SOCKET_ADDR_FAMILY(addr) == AF_INET && peer == NULL) {
+        virReportError(VIR_ERR_SYSTEM_ERROR,
+                       _("AAA broadcast %s"), ifname);
+
         /* compute a broadcast address if this is IPv4 */
         if (VIR_ALLOC(broadcast) < 0)
             return -1;
