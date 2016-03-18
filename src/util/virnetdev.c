@@ -1053,7 +1053,7 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
     if (virNetDevGetIPAddressBinary(addr, &addrData, &addrDataLen) < 0)
         return NULL;
 
-    if (peer) {
+    if (peer && VIR_SOCKET_ADDR_VALID(peer)) {
         if (virNetDevGetIPAddressBinary(peer, &peerData, &addrDataLen) < 0)
             return NULL;
     } else if (broadcast) {
@@ -1086,20 +1086,13 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
         goto buffer_too_small;
 
     if (peerData) {
-        virReportError(VIR_ERR_SYSTEM_ERROR,
-                       ("peerdata on %s"), ifname);
-
         if (nla_put(nlmsg, IFA_ADDRESS, addrDataLen, peerData) < 0)
             goto buffer_too_small;
     } else if (broadcastData) {
-        virReportError(VIR_ERR_SYSTEM_ERROR,
-                       ("broadcastdata on %s"), ifname);
-
         if (nla_put(nlmsg, IFA_BROADCAST, addrDataLen, broadcastData) < 0)
             goto buffer_too_small;
     } else {
-        virReportError(VIR_ERR_SYSTEM_ERROR,
-                       ("AAAA on %s"), ifname);
+        goto buffer_too_small;
     }
 
     return nlmsg;
@@ -1135,12 +1128,8 @@ int virNetDevSetIPAddress(const char *ifname,
     struct nlmsghdr *resp = NULL;
     unsigned int recvbuflen;
 
-
     /* The caller needs to provide a correct address */
-    if (VIR_SOCKET_ADDR_FAMILY(addr) == AF_INET && peer == NULL) {
-        virReportError(VIR_ERR_SYSTEM_ERROR,
-                       _("AAA broadcast %s"), ifname);
-
+    if (VIR_SOCKET_ADDR_FAMILY(addr) == AF_INET && !VIR_SOCKET_ADDR_VALID(peer)) {
         /* compute a broadcast address if this is IPv4 */
         if (VIR_ALLOC(broadcast) < 0)
             return -1;
