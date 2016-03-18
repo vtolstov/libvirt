@@ -1088,11 +1088,11 @@ virNetDevCreateNetlinkAddressMessage(int messageType,
     if (peerData) {
         if (nla_put(nlmsg, IFA_ADDRESS, addrDataLen, peerData) < 0)
             goto buffer_too_small;
-    } else if (broadcastData) {
+    }
+
+    if (broadcastData) {
         if (nla_put(nlmsg, IFA_BROADCAST, addrDataLen, broadcastData) < 0)
             goto buffer_too_small;
-    } else {
-        goto buffer_too_small;
     }
 
     return nlmsg;
