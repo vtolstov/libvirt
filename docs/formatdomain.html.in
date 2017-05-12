@@ -5470,6 +5470,27 @@ qemu-kvm -net nic,model=? /dev/null
       <span class="since">Since 0.9.5</span>
     </p>
 
+    <h5><a name="elementHostLink">Modifying phisical link state</a></h5>
+<pre>
+...
+&lt;devices&gt;
+  &lt;interface type='ethernet'&gt;
+    &lt;source&gt;
+    <b>&lt;link state='down'/&gt;</b>
+    &lt;target dev='vnet0'/&gt;
+  &lt;/interface&gt;
+&lt;/devices&gt;
+...</pre>
+
+    <p>
+      This element provides means of setting state of the phisical network interface.
+      Possible values for attribute <code>state</code> are <code>up</code> and
+      <code>down</code>. If <code>down</code> is specified as the value, the interface
+      put in down state. Default behavior if this element is unspecified is to have the
+      link state <code>up</code>.
+      <span class="since">Since 3.3.2</span>
+    </p>
+
     <h5><a name="mtu">MTU configuration</a></h5>
 <pre>
 ...
