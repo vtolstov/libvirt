@@ -2978,6 +2978,7 @@ qemuDomainChangeNet(virQEMUDriverPtr driver,
     bool needBridgeChange = false;
     bool needFilterChange = false;
     bool needLinkStateChange = false;
+    bool needHostLinkStateChange = false;
     bool needReplaceDevDef = false;
     bool needBandwidthSet = false;
     int ret = -1;
@@ -3264,6 +3265,9 @@ qemuDomainChangeNet(virQEMUDriverPtr driver,
     if (olddev->linkstate != newdev->linkstate)
         needLinkStateChange = true;
 
+    if (olddev->hostlinkstate != newdev->hostlinkstate)
+        needHostLinkStateChange = true;
+
     if (!virNetDevBandwidthEqual(virDomainNetGetActualBandwidth(olddev),
                                  virDomainNetGetActualBandwidth(newdev)))
         needBandwidthSet = true;
@@ -3306,6 +3310,19 @@ qemuDomainChangeNet(virQEMUDriverPtr driver,
     if (needLinkStateChange &&
         qemuDomainChangeNetLinkState(driver, vm, olddev, newdev->linkstate) < 0) {
         goto cleanup;
+    }
+
+    if (needHostLinkStateChange) {
+        if (newdev->hostlinkstate == VIR_DOMAIN_NET_INTERFACE_LINK_STATE_DOWN) {
+            if (virNetDevSetOnline(newdev->ifname, false) < 0)
+                goto cleanup;
+        } else {
+            if (virNetDevSetOnline(newdev->ifname, true) < 0)
+                goto cleanup;
+            if (virNetDevIPInfoAddToDev(newdev->ifname, &newdev->hostIP) < 0)
+                goto cleanup;
+        }
+        needReplaceDevDef = true;
     }
 
     if (needReplaceDevDef) {

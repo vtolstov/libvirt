@@ -2798,6 +2798,17 @@
       All ip-related info for either the host or guest side of an interface
   -->
   <define name="interface-ip-info">
+    <optional>
+      <element name="link">
+        <attribute name="state">
+          <choice>
+            <value>up</value>
+            <value>down</value>
+          </choice>
+        </attribute>
+        <empty/>
+      </element>
+    </optional>
     <zeroOrMore>
       <element name="ip">
         <attribute name="address">

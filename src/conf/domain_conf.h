@@ -1037,6 +1037,7 @@ struct _virDomainNetDef {
     virNetDevVlan vlan;
     int trustGuestRxFilters; /* enum virTristateBool */
     int linkstate;
+    int hostlinkstate;
     unsigned int mtu;
     virNetDevCoalescePtr coalesce;
 };

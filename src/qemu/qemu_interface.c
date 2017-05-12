@@ -413,7 +413,7 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
 {
     virMacAddr tapmac;
     int ret = -1;
-    unsigned int tap_create_flags = VIR_NETDEV_TAP_CREATE_IFUP;
+    unsigned int tap_create_flags = 0;
     bool template_ifname = false;
     virQEMUDriverConfigPtr cfg = virQEMUDriverGetConfig(driver);
     const char *tunpath = "/dev/net/tun";
@@ -426,6 +426,9 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
             goto cleanup;
         }
     }
+
+    if (net->hostlinkstate != VIR_DOMAIN_NET_INTERFACE_LINK_STATE_DOWN)
+        tap_create_flags |= VIR_NETDEV_TAP_CREATE_IFUP;
 
     if (!net->ifname ||
         STRPREFIX(net->ifname, VIR_NET_GENERATED_TAP_PREFIX) ||
@@ -453,7 +456,7 @@ qemuInterfaceEthernetConnect(virDomainDefPtr def,
     if (virNetDevSetMAC(net->ifname, &tapmac) < 0)
         goto cleanup;
 
-    if (virNetDevSetOnline(net->ifname, true) < 0)
+    if (virNetDevSetOnline(net->ifname, !!(tap_create_flags & VIR_NETDEV_TAP_CREATE_IFUP)) < 0)
         goto cleanup;
 
     if (net->script &&
