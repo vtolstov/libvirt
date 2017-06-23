@@ -10540,6 +10540,10 @@ virDomainNetDefParseXML(virDomainXMLOptionPtr xmlopt,
                            hostlinkstate);
             goto error;
         }
+    } else {
+        if (def->type == VIR_DOMAIN_NET_TYPE_ETHERNET) {
+            def->hostlinkstate = def->linkstate;
+        }
     }
 
     if (filter != NULL) {
